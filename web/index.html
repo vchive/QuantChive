@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>QuantChive · 市场观测</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header>
+    <h1>QuantChive 市场观测</h1>
+    <nav class="tabs">
+      <button class="tab active" data-asset="a_share">A股</button>
+      <button class="tab" data-asset="fund_etf">基金/ETF</button>
+    </nav>
+    <div id="crumbs" class="crumbs"></div>
+    <div id="meta" class="meta"></div>
+  </header>
+
+  <main id="view"><!-- 视图按下钻层级动态渲染 --></main>
+
+  <footer>
+    <span id="prov" class="prov"></span>
+  </footer>
+
+  <script src="/app.js"></script>
+</body>
+</html>
