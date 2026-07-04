@@ -10,6 +10,8 @@ baostock 模块可注入（宪章 IV，测试用 fake 不联网）；bs.login/lo
 
 from __future__ import annotations
 
+import contextlib
+import io
 from decimal import Decimal
 from typing import Sequence
 
@@ -26,6 +28,12 @@ from quantchive.models.enums import (
 )
 
 _log = get_logger(__name__)
+
+
+def _quiet(fn):
+    """baostock login/logout 无条件 print 到 stdout——抑制，避免刷屏。"""
+    with contextlib.redirect_stdout(io.StringIO()):
+        return fn()
 
 # adjust → baostock adjustflag（'1'后复权 '2'前复权 '3'不复权）
 _ADJUST = {"none": "3", "qfq": "2", "hfq": "1"}
@@ -68,6 +76,18 @@ class BaostockSource:
         if bs_module is None:
             import baostock as bs_module
         self._bs = bs_module
+        self._in_session = False        # 会话内复用登录，避免每股 login/logout
+
+    @contextlib.contextmanager
+    def session(self):
+        """整批回填登录一次：`with src.session(): ...`——省去每股 login/logout（刷屏+慢）。"""
+        _quiet(self._bs.login)
+        self._in_session = True
+        try:
+            yield self
+        finally:
+            self._in_session = False
+            _quiet(self._bs.logout)
 
     def fetch_price_history(
         self, *, symbol: str, exchange: str | None,
@@ -78,7 +98,9 @@ class BaostockSource:
         secid = secid_for_baostock(symbol, exchange)
         freq = _FREQ.get(granularity, "d")
         adjustflag = _ADJUST.get(adjust, "2")
-        self._bs.login()
+        own = not self._in_session        # 会话外单次调用才自管登录（向后兼容）
+        if own:
+            _quiet(self._bs.login)
         try:
             rs = self._bs.query_history_k_data_plus(
                 secid, _FIELDS, start_date=start_date, end_date=end_date,
@@ -90,7 +112,8 @@ class BaostockSource:
             while rs.error_code == "0" and rs.next():
                 rows.append(rs.get_row_data())
         finally:
-            self._bs.logout()
+            if own:
+                _quiet(self._bs.logout)
         return [o for o in (self._row_to_obs(r, symbol, exchange) for r in rows) if o is not None]
 
     def _row_to_obs(self, row, symbol, exchange) -> RawObservation | None:

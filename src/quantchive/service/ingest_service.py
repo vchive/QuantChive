@@ -678,7 +678,11 @@ def backfill_price_history(
         return r
 
     # 采集纪律基类：失败标的分轮重试（US4/FR-016），单写者串行
-    outcome = run_per_subject(subjects, _tracked, sleep=_time.sleep, max_rounds=2)
+    # baostock 支持 session()→整批登录一次（省每股 login/logout 刷屏+慢）
+    import contextlib as _ctx
+    _sess = source.session() if hasattr(source, "session") else _ctx.nullcontext()
+    with _sess:
+        outcome = run_per_subject(subjects, _tracked, sleep=_time.sleep, max_rounds=2)
     subjects_ok = len(outcome.ok)
     subjects_failed = len(outcome.failed)
     rows_written = counters["rows"]
