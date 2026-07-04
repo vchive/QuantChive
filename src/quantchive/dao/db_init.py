@@ -8,12 +8,15 @@ from pathlib import Path
 
 _SCHEMA_SQL = Path(__file__).with_name("schema.sql")
 
-# 数据源静态声明（research.md D1/D5 + spec002 D8）
+# 数据源静态声明（research.md D1/D5 + spec002 D8 + spec003 D4/D6）
 _SEED_SOURCES = [
-    # source_code, display_name, caliber, supports_five_tier, has_daily_final, amount_unit, adapter_impl
-    ("eastmoney", "东方财富", "eastmoney", 1, 1, "yuan", "em_sector_src.EastMoneySource"),
-    ("ths", "同花顺", "ths", 0, 0, "yi", "ths_src.ThsSource"),
-    ("em_fund", "东财基金", "eastmoney", 0, 0, "yuan", "fund_src.FundSource"),
+    # source_code, display_name, caliber, supports_five_tier, has_daily_final, amount_unit, adapter_impl, is_active
+    ("eastmoney", "东方财富", "eastmoney", 1, 1, "yuan", "em_sector_src.EastMoneySource", 1),
+    ("ths", "同花顺", "ths", 0, 0, "yi", "ths_src.ThsSource", 1),
+    ("em_fund", "东财基金", "eastmoney", 0, 0, "yuan", "fund_src.FundSource", 1),
+    # spec003：baostock 历史行情源（无资金流）；ths_flow 同花顺资金流备源（初始停用，验 hexin-v 后启用）
+    ("baostock", "baostock 历史行情", "baostock", 0, 1, "yuan", "baostock_src.BaostockSource", 1),
+    ("ths_flow", "同花顺资金流", "ths", 1, 0, "yuan", "ths_flow_src.ThsFlowSource", 0),
 ]
 
 # spec002 品种（预留位）
@@ -62,12 +65,15 @@ _SEED_APPLICABILITY = [
     ("circ_mktcap", "fund_etf", "etf"), ("nav", "fund_etf", "open_fund"),
 ]
 
-# spec002 扩展 ingestion_run 的列（幂等 ALTER；旧表 spec001 已有基础列）
+# spec002/003 扩展 ingestion_run 的列（幂等 ALTER；旧表 spec001 已有基础列）
 _RUN_ALTER_COLS = [
     ("subjects_ok", "INTEGER NOT NULL DEFAULT 0"),
     ("subjects_failed", "INTEGER NOT NULL DEFAULT 0"),
     ("asset_class_code", "TEXT"),
     ("aggregate_coverage", "TEXT"),
+    # spec003：主备切换后实际取数的源 + 限流降级标记（审计，FR-019/SC-001）
+    ("used_source_code", "TEXT"),
+    ("degraded", "INTEGER NOT NULL DEFAULT 0"),
 ]
 
 
@@ -143,6 +149,8 @@ def _relax_ingestion_run_check(conn: sqlite3.Connection) -> None:
     prev_isolation = conn.isolation_level
     conn.isolation_level = None  # 自动提交，使 PRAGMA 生效
     conn.execute("PRAGMA foreign_keys = OFF")
+    # legacy_alter_table=ON：RENAME 纯改名，不重写子表 FK 引用（防子表 FK 指向被删旧表）
+    conn.execute("PRAGMA legacy_alter_table = ON")
     try:
         conn.execute("BEGIN")
         conn.execute("ALTER TABLE ingestion_run RENAME TO _ingestion_run_old")
@@ -163,6 +171,67 @@ def _relax_ingestion_run_check(conn: sqlite3.Connection) -> None:
         conn.execute("ROLLBACK")
         raise
     finally:
+        conn.execute("PRAGMA legacy_alter_table = OFF")
+        conn.execute(f"PRAGMA foreign_keys = {'ON' if fk_on else 'OFF'}")
+        conn.isolation_level = prev_isolation
+
+
+_DATA_SOURCE_RELAXED_DDL = """
+CREATE TABLE data_source (
+    source_code        TEXT PRIMARY KEY,
+    display_name       TEXT NOT NULL,
+    caliber            TEXT NOT NULL,
+    supports_five_tier INTEGER NOT NULL CHECK (supports_five_tier IN (0,1)),
+    has_daily_final    INTEGER NOT NULL CHECK (has_daily_final IN (0,1)),
+    amount_unit        TEXT NOT NULL CHECK (amount_unit IN ('yuan','yi')),
+    adapter_impl       TEXT NOT NULL,
+    is_active          INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0,1)),
+    created_at         TEXT NOT NULL
+)
+"""
+
+
+def _relax_data_source_check(conn: sqlite3.Connection) -> None:
+    """迁移旧库 data_source 的窄 caliber CHECK → 无枚举约束（spec003 新增 baostock 等源）。
+
+    与 _relax_ingestion_run_check 同法（12 步保数据重建）。data_source 被多表 source_code FK
+    引用——PK 不变、行全保留，FK 完整性不破。新库 schema.sql 已无该 CHECK，对其无操作。
+    """
+    ddl_row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='data_source'"
+    ).fetchone()
+    if not ddl_row or not ddl_row[0]:
+        return
+    if "CHECK (caliber IN" not in ddl_row[0] and "CHECK(caliber IN" not in ddl_row[0]:
+        return  # 已宽松（新库/已迁移）
+    leftover = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='_data_source_old'"
+    ).fetchone()
+    if leftover:
+        raise RuntimeError("_data_source_old 残留（疑似前次迁移中断），拒绝自动重建；请人工核对")
+
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(data_source)").fetchall()]
+    fk_on = conn.execute("PRAGMA foreign_keys").fetchone()[0]
+    conn.commit()
+    prev_isolation = conn.isolation_level
+    conn.isolation_level = None
+    conn.execute("PRAGMA foreign_keys = OFF")
+    # legacy_alter_table=ON：RENAME 纯改名，不重写子表 FK 引用（否则子表 FK 会指向被删的旧表）
+    conn.execute("PRAGMA legacy_alter_table = ON")
+    try:
+        conn.execute("BEGIN")
+        conn.execute("ALTER TABLE data_source RENAME TO _data_source_old")
+        conn.execute(_DATA_SOURCE_RELAXED_DDL)
+        col_list = ", ".join(cols)
+        conn.execute(
+            f"INSERT INTO data_source ({col_list}) SELECT {col_list} FROM _data_source_old")
+        conn.execute("DROP TABLE _data_source_old")
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    finally:
+        conn.execute("PRAGMA legacy_alter_table = OFF")
         conn.execute(f"PRAGMA foreign_keys = {'ON' if fk_on else 'OFF'}")
         conn.isolation_level = prev_isolation
 
@@ -173,11 +242,12 @@ def seed_data_sources(conn: sqlite3.Connection) -> None:
         """INSERT INTO data_source
             (source_code, display_name, caliber, supports_five_tier,
              has_daily_final, amount_unit, adapter_impl, is_active, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(source_code) DO UPDATE SET
             display_name=excluded.display_name, supports_five_tier=excluded.supports_five_tier,
             has_daily_final=excluded.has_daily_final, amount_unit=excluded.amount_unit,
             adapter_impl=excluded.adapter_impl""",
+        # 注：is_active 不进 DO UPDATE——保留运行期切换（如 ths_flow 验证 hexin-v 后启用不被 seed 重置）
         [(*row, now) for row in _SEED_SOURCES],
     )
 
@@ -215,6 +285,7 @@ def seed_spec002(conn: sqlite3.Connection) -> None:
 def init_db(conn: sqlite3.Connection) -> None:
     apply_schema(conn)
     _relax_ingestion_run_check(conn)  # 旧库放宽 run_type CHECK（保数据表重建）
+    _relax_data_source_check(conn)    # 旧库放宽 caliber CHECK（spec003 新源 baostock）
     _alter_ingestion_run(conn)
     seed_data_sources(conn)
     seed_spec002(conn)

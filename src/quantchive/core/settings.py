@@ -42,6 +42,19 @@ class Settings(BaseSettings):
     # 注意：停牌股贡献 0 流入，求和本身完整；门禁主要防"抓取失败"漏计，非停牌。
     market_coverage_threshold: float = Field(default=0.95, gt=0, le=1)
 
+    # ---- spec003 数据层韧性（限流治理 / 缓存 / 回填）----
+    # 翻页页间随机节流区间（秒）——防高频翻页触发东财 IP 限流（research D1）
+    page_sleep_min: float = Field(default=0.5, ge=0)
+    page_sleep_max: float = Field(default=1.5, ge=0)
+    # 退避随机抖动上限（秒）——打散重试指纹（research D1）
+    backoff_jitter: float = Field(default=1.5, ge=0)
+    # HTTP 缓存 TTL（秒）：历史/日终收盘不变→长；实时快照→短或不缓存（research D2）
+    cache_ttl_historical: int = Field(default=86400)   # 1 天
+    cache_ttl_realtime: int = Field(default=0)         # 0=不缓存
+    cache_enabled: bool = Field(default=True)
+    # 历史回填默认深度（交易日），对齐保留窗
+    backfill_default_days: int = Field(default=30, ge=1)
+
 
 
     # 采集间隔（秒）—— spec001 兼容保留

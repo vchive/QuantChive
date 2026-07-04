@@ -5,9 +5,10 @@ PRAGMA foreign_keys = ON;
 
 -- 1. 数据来源抽象
 CREATE TABLE IF NOT EXISTS data_source (
-    source_code        TEXT PRIMARY KEY,              -- 'eastmoney' | 'ths'
+    source_code        TEXT PRIMARY KEY,              -- 'eastmoney'|'ths'|'baostock'|'ths_flow'...
     display_name       TEXT NOT NULL,
-    caliber            TEXT NOT NULL CHECK (caliber IN ('eastmoney','ths')),
+    -- caliber 校验上移 enum（spec003：新增 baostock 等源，去硬枚举 CHECK 与 ingestion_run 一致）
+    caliber            TEXT NOT NULL,
     supports_five_tier INTEGER NOT NULL CHECK (supports_five_tier IN (0,1)),
     has_daily_final    INTEGER NOT NULL CHECK (has_daily_final IN (0,1)),
     amount_unit        TEXT NOT NULL CHECK (amount_unit IN ('yuan','yi')),
@@ -169,3 +170,22 @@ CREATE TABLE IF NOT EXISTS observation_metric (
     UNIQUE (observation_id, metric_name)
 );
 CREATE INDEX IF NOT EXISTS idx_obsmetric_name ON observation_metric (metric_name, observation_id);
+
+-- ============================================================================
+-- spec003 数据层韧性：已存区间表（增量回填/缺口检测，仿 vnpy BarOverview，data-model D5）
+-- ============================================================================
+
+-- v3.1 主体×指标×粒度×源 的已存连续区间（回填前查缺口、回填后合并区间）
+CREATE TABLE IF NOT EXISTS coverage_range (
+    coverage_id   INTEGER PRIMARY KEY,
+    subject_id    INTEGER NOT NULL REFERENCES subject(subject_id),
+    metric_kind   TEXT NOT NULL,          -- 'money_flow' | 'price_hist'（回填历史类别；realtime 不入本表）
+    granularity   TEXT NOT NULL,          -- 'daily' | '1min' | '5min'
+    source_code   TEXT NOT NULL REFERENCES data_source(source_code),
+    start_date    TEXT NOT NULL,          -- 已存最早交易日（含）
+    end_date      TEXT NOT NULL,          -- 已存最晚交易日（含）
+    updated_at    TEXT NOT NULL,
+    UNIQUE (subject_id, metric_kind, granularity, source_code)
+);
+CREATE INDEX IF NOT EXISTS idx_coverage_lookup
+    ON coverage_range (subject_id, metric_kind, granularity);

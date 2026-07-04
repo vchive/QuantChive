@@ -102,3 +102,28 @@ class ObservationSource(Protocol):
     ) -> Sequence[RawObservation]:
         """日终确定值。"""
         ...
+
+
+# ---- spec003 历史行情源（冷热分离，research.md D4）----
+
+
+@runtime_checkable
+class HistorySource(Protocol):
+    """历史行情源（独立于实时采集，可回溯多年）。baostock 等实现之。
+
+    与 ObservationSource 分离：历史源只提供价/量/额历史，能力可不含资金流——
+    诚实自描述（无某指标不伪造）。归一后输出 RawObservation，下游零改动。
+    """
+
+    source_id: str
+
+    def fetch_price_history(
+        self, *, symbol: str, exchange: str | None,
+        start_date: str, end_date: str, granularity: str = "daily",
+        adjust: str = "none",   # 'none' | 'qfq'(前复权) | 'hfq'(后复权)
+    ) -> Sequence[RawObservation]:
+        """取 [start_date, end_date] 的历史行情，归一为带真实 trade_date 的观测。
+
+        无前视：只返真实交易日历史值。失败经重试后抛 DataSourceError。
+        """
+        ...

@@ -51,3 +51,5 @@ class RawObservation:
     em_board_code: str | None = None
     source_unit: AmountUnit = AmountUnit.YUAN
     raw_value: str | None = None
+    # 历史行情用：该观测所属真实交易日（实时快照为 None，由采集层用批次日期）
+    trade_date: str | None = None

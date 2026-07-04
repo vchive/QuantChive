@@ -44,6 +44,7 @@ class RunDao:
         subjects_failed: int | None = None, achieved_interval_sec: int | None = None,
         retry_count: int = 0, error_type: str | None = None, error_detail: dict | None = None,
         aggregate_coverage: dict | None = None,
+        degraded: bool = False, used_source_code: str | None = None,
     ) -> None:
         now = datetime.now(timezone.utc).isoformat()
         # 别名归一：优先 subjects_*，回落 sectors_*（旧调用），默认 0
@@ -53,11 +54,11 @@ class RunDao:
             """UPDATE ingestion_run SET finished_at=?, status=?,
                sectors_ok=?, sectors_failed=?, subjects_ok=?, subjects_failed=?,
                achieved_interval_sec=?, retry_count=?, error_type=?, error_detail=?,
-               aggregate_coverage=? WHERE run_id=?""",
+               aggregate_coverage=?, degraded=?, used_source_code=? WHERE run_id=?""",
             (now, status.value, ok, failed, ok, failed, achieved_interval_sec, retry_count,
              error_type, json.dumps(error_detail, ensure_ascii=False) if error_detail else None,
              json.dumps(aggregate_coverage, ensure_ascii=False) if aggregate_coverage else None,
-             run_id),
+             1 if degraded else 0, used_source_code, run_id),
         )
 
     def latest(self, caliber: Caliber | None = None) -> dict | None:

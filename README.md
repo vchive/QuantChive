@@ -28,9 +28,10 @@ uv run quantchive-collect --target stock       # 全市场个股 + 大盘求和(
 uv run quantchive-collect --target etf         # 全 ETF 价/量/规模
 uv run quantchive-collect --target members     # 板块→成分个股归属（下钻数据，991板块约几分钟）
 
-# 历史日线资金流回填（真历史，回溯约120交易日）
-uv run quantchive-collect --target backfill --scope sector --days 60   # 板块历史(快)
-uv run quantchive-collect --target backfill --scope stock  --days 60   # 个股历史(5535只,较慢)
+# 历史行情回填（baostock，独立于东财限流，回溯多年）
+uv run quantchive-collect --target backfill --source baostock --scope stock --days 60  # 价/量/额历史
+# 历史资金流回填（东财 fflow，受限流；节流缓解）
+uv run quantchive-collect --target backfill --source eastmoney --metric money_flow --scope stock --days 60
 
 # 起 Web（下钻可视化 + 只读 API）
 uv run uvicorn quantchive.app:app --reload
@@ -40,15 +41,30 @@ uv run uvicorn quantchive.app:app --reload
 uv run pytest
 ```
 
+## 数据层韧性（spec003 · 多源可插拔 + 限流治理 + 冷热分离 + 缓存）
+
+东财自 2025-04 对 IP 限频；**换库不解决**（akshare/efinance 底层同为 push2his）。出路是治理 + 分流：
+
+| 能力 | 做法 |
+|---|---|
+| **限流治理** | 翻页页间随机节流（0.5~1.5s）+ 退避加随机抖动 + requests-cache 透明缓存（历史长TTL/实时不缓存）|
+| **零静默降级** | 请求全量却只回极少条 → 识别为限流降级、记 `ingestion_run.degraded`、拒绝落残缺数据（宁缺勿假）|
+| **冷热分离** | 历史行情走 **baostock**（自有 API、无 IP 限流、有复权、深至 1990）——彻底离开东财高频路径 |
+| **增量补缺** | `coverage_range` 记「主体×指标已存区间」，二次回填仅补缺口、零冗余请求 |
+| **多源故障切换** | 资金流 东财(主)/**同花顺 10jqka**(备，独立后端) 双活；主源限流自动切备源、审计实际用源 |
+| **采集纪律** | 单写者 + 请求间节流 + 失败标的分轮重试 + 完整性校验重取 |
+
+> 换源/加源不改上层（`ObservationSource`/`HistorySource` Protocol + 选源工厂）。同花顺 `hexin-v` 头依赖 JS 生成，首用需小流量验证（验不过降级预留，不阻塞）。
+
 ## 两种时序数据（重要）
 
 | | 来源 | 深度 | 前端 |
 |---|---|---|---|
-| **日线历史** | 东财 fflow/daykline（`--target backfill`）| 回溯约 120 交易日的每日五档净额 | series 视图默认「日线历史」|
+| **日线历史** | baostock 价量历史 / 东财 fflow 资金流（`--target backfill`）| baostock 回溯多年、东财约 120 交易日 | series 视图默认「日线历史」|
 | **盘中分钟** | clist 快照轮询（调度器/反复 collect）| 只能**向前积累**——运行采集器之后才有 | series 视图「当日分钟」|
 
-> 东财只提供**历史日线**，不提供**历史分钟资金流**。所以：过去几十天的日线曲线可回填得到；
-> 某天盘中每分钟的资金流只能从今天开始采、明天才有"昨天全天"。
+> baostock 提供历史**价/量/额**（不受东财限流）；历史**资金流**由东财 fflow 或同花顺提供。
+> 盘中每分钟资金流只能从今天开始采、明天才有"昨天全天"。
 
 ## 自动采集调度
 

@@ -1,18 +1,21 @@
-"""东财 clist 通用客户端（T016，从 akshare_src 抽出）。
+"""东财 clist 通用客户端（从 akshare_src 抽出）。
 
 - push2delay 主域名（抗限流）+ push2 回退。
 - 翻页：单页硬顶 100，动态翻至 ceil(total/100)（5535 股需 56 页，绝不静默截断）。
-- 重试退避、结构化 DataSourceError、http_get 可注入（宪章 IV）。
+- **翻页页间随机节流 + 退避随机抖动**（spec003 D1，防高频打限流）。
+- 重试退避、结构化 DataSourceError、http_get/sleep/rng 可注入（宪章 IV）。
 返回 data.diff 原始行（含 f-code），映射交给各 Source。
 """
 
 from __future__ import annotations
 
+import random
 import time as _time
 from math import ceil
 from typing import Callable
 
 from quantchive.core.logging import get_logger
+from quantchive.datasource._http_client import backoff_delay
 from quantchive.datasource.base import DataSourceError
 
 _log = get_logger(__name__)
@@ -37,10 +40,13 @@ class EmClient:
         max_retries: int = 3,
         backoff_base: float = 3.0,
         backoff_cap: float = 20.0,
+        backoff_jitter: float = 1.5,
         timeout: float = 15.0,
         page_size: int = _PAGE_CAP,
         max_pages: int | None = None,
+        page_sleep: tuple[float, float] = (0.5, 1.5),
         sleep: Callable[[float], None] = _time.sleep,
+        rng: Callable[[float, float], float] = random.uniform,
     ) -> None:
         if http_get is None:
             import requests
@@ -49,11 +55,14 @@ class EmClient:
         self._max_retries = max_retries
         self._backoff_base = backoff_base
         self._backoff_cap = backoff_cap
+        self._backoff_jitter = backoff_jitter
         self._timeout = timeout
         # 单页不得超东财硬顶 100（传更大也强制收敛，防只拿首页）
         self._page_size = min(page_size, _PAGE_CAP)
         self._max_pages = max_pages   # None=动态 ceil(total/pz)；仅测试/保护性封顶用
+        self._page_sleep = page_sleep  # 翻页页间随机节流区间（防限流，D1）
         self._sleep = sleep
+        self._rng = rng
 
     def _params(self, fs: str, fields: str, fid: str, page: int) -> dict:
         return {
@@ -93,6 +102,7 @@ class EmClient:
                     need_pages = min(need_pages, self._max_pages)
                 page = 2
                 while len(rows) < total and page <= need_pages:
+                    self._sleep(self._rng(*self._page_sleep))  # 页间随机节流（防限流，D1）
                     more, _ = self._get_page(host, fs, fields, fid, page=page)
                     if not more:
                         break
@@ -132,9 +142,12 @@ class EmClient:
                     raise
                 last_exc = exc
                 if attempt < self._max_retries - 1:
-                    delay = min(self._backoff_base * (2 ** attempt), self._backoff_cap)
+                    delay = backoff_delay(
+                        attempt, base=self._backoff_base, cap=self._backoff_cap,
+                        jitter=self._backoff_jitter, rng=self._rng)  # 退避加抖动（D1）
                     _log.info("东财 clist 重试", extra={"context": {
-                        "attempt": attempt + 1, "delay": delay, "err": type(exc).__name__}})
+                        "attempt": attempt + 1, "delay": round(delay, 2),
+                        "err": type(exc).__name__}})
                     self._sleep(delay)
         raise DataSourceError(
             f"东财 clist 失败(重试{self._max_retries}次): {last_exc}",

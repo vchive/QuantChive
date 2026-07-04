@@ -31,6 +31,7 @@ from quantchive.service.ingest_service import (
     collect_sector_observations_once,
     collect_stock_observations_once,
 )
+from quantchive.datasource._http_client import default_http_get
 from quantchive.service.market_aggregate import MarketAggregator
 
 _log = get_logger(__name__)
@@ -42,7 +43,11 @@ def main(argv: list[str] | None = None) -> None:
                         choices=["sector", "stock", "etf", "members", "backfill"])
     parser.add_argument("--sector-type", default="industry,concept")
     parser.add_argument("--scope", default="stock", choices=["stock"],
-                        help="backfill: 回填个股历史（板块历史东财 fflow 不供，后续由成分派生）")
+                        help="backfill: 回填个股历史")
+    parser.add_argument("--source", default="baostock", choices=["baostock", "eastmoney"],
+                        help="backfill: 历史源（baostock 价量历史/不限流；eastmoney 资金流历史/受限流）")
+    parser.add_argument("--metric", default="price_hist", choices=["price_hist", "money_flow"],
+                        help="backfill: 指标类别")
     parser.add_argument("--days", type=int, default=30, help="backfill: 回填交易日数")
     parser.add_argument("--limit", type=int, default=None,
                         help="members/backfill: 限制主体数（调试）")
@@ -52,16 +57,30 @@ def main(argv: list[str] | None = None) -> None:
     conn = connect(settings.db_path)
     init_db(conn)
 
-    # backfill：历史日线资金流回填（逐主体自动提交，不包大事务）
+    # backfill：历史回填（逐主体自动提交，不包大事务）
     if args.target == "backfill":
-        from quantchive.datasource.em_kline_src import EastMoneyDailyFlowSource
-
         def _prog(done, total, name):
             if done % 100 == 0 or done == total:
                 print(f"  回填 {done}/{total} … {name}", flush=True)
+
+        # baostock 价量历史（独立于东财限流，US2/D4）
+        if args.source == "baostock" or args.metric == "price_hist":
+            from quantchive.datasource.baostock_src import BaostockSource
+            from quantchive.service.ingest_service import backfill_price_history
+            summary = backfill_price_history(
+                conn, source=BaostockSource(), scope=args.scope, days=args.days,
+                source_code="baostock", limit=args.limit, progress=_prog)
+            _log.info("历史回填完成", extra={"context": summary})
+            print(f"backfill[baostock/{summary['scope']}]: 主体 "
+                  f"{summary['subjects_ok']}/{summary['subjects_total']} · 日线行 {summary['rows_written']} "
+                  f"· {summary['days']}天 · 跳过已存 {summary['skipped_covered']} · 失败 {summary['subjects_failed']}")
+            sys.exit(1 if summary["rows_written"] == 0 and summary["skipped_covered"] == 0 else 0)
+
+        # 东财资金流历史（受限流，节流缓解）
+        from quantchive.datasource.em_kline_src import EastMoneyDailyFlowSource
         summary = backfill_daily_flow(
-            conn, source=EastMoneyDailyFlowSource(), scope=args.scope, days=args.days,
-            limit=args.limit, sleep_sec=0.25, progress=_prog)
+            conn, source=EastMoneyDailyFlowSource(http_get=default_http_get()), scope=args.scope,
+            days=args.days, limit=args.limit, sleep_sec=0.25, progress=_prog)
         _log.info("历史回填完成", extra={"context": summary})
         print(f"backfill[{summary['scope']}]: 主体 {summary['subjects_ok']}/{summary['subjects_total']} "
               f"· 日线行 {summary['rows_written']} · {summary['days']}天 "
@@ -74,7 +93,7 @@ def main(argv: list[str] | None = None) -> None:
             if done % 50 == 0 or done == total:
                 print(f"  成分采集 {done}/{total} … {name}", flush=True)
         summary = collect_all_sector_members(
-            conn, source=EastMoneySource(), adapter_version="push2delay-v2",
+            conn, source=EastMoneySource(http_get=default_http_get()), adapter_version="push2delay-v2",
             limit=args.limit, progress=_prog)
         _log.info("成分采集完成", extra={"context": summary})
         print(f"members: 板块 {summary['boards_ok']}/{summary['boards_total']} 成功 "
@@ -88,17 +107,17 @@ def main(argv: list[str] | None = None) -> None:
                 caliber=Caliber.EASTMONEY, source_code="eastmoney",
                 sector_types=sector_types, adapter_version="push2delay-v2")
             result = collect_sector_observations_once(
-                req, source=EastMoneySource(), observation_dao=ObservationDao(conn),
+                req, source=EastMoneySource(http_get=default_http_get()), observation_dao=ObservationDao(conn),
                 run_dao=RunDao(conn), subject_dao=SubjectDao(conn))
         elif args.target == "stock":
             result = collect_stock_observations_once(
-                source=EastMoneyStockSource(), observation_dao=ObservationDao(conn),
+                source=EastMoneyStockSource(http_get=default_http_get()), observation_dao=ObservationDao(conn),
                 run_dao=RunDao(conn), subject_dao=SubjectDao(conn),
                 aggregator=MarketAggregator(conn, threshold=settings.market_coverage_threshold),
                 adapter_version="push2delay-stock-v1")
         else:  # etf
             result = collect_etf_observations_once(
-                source=EastMoneyEtfSource(), observation_dao=ObservationDao(conn),
+                source=EastMoneyEtfSource(http_get=default_http_get()), observation_dao=ObservationDao(conn),
                 subject_dao=SubjectDao(conn), run_dao=RunDao(conn),
                 adapter_version="push2delay-etf-v1")
 

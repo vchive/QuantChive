@@ -19,6 +19,8 @@ from quantchive.dao.constituent_dao import ConstituentDao
 from quantchive.dao.observation_dao import ObservationDao
 from quantchive.dao.run_dao import RunDao
 from quantchive.dao.subject_dao import SubjectDao
+from quantchive.datasource._collector_base import run_per_subject
+from quantchive.datasource._http_client import is_degraded
 from quantchive.datasource.base import DataSourceError, ObservationSource
 from quantchive.models.enums import (
     Caliber, RunStatus, RunType, SectorType, SubjectKind, ValueType,
@@ -304,6 +306,8 @@ def collect_stock_observations_once(
         run_id, status=status, subjects_ok=rows_written, subjects_failed=len(failures),
         error_type=(failures[0].get("error") if failures else None),
         error_detail={"failures": failures} if failures else None,
+        degraded=is_degraded(got=rows_written, expected_min=expected),  # 限流降级识别(SC-001)
+        used_source_code=source_code,
         aggregate_coverage=(
             {"coverage": agg.coverage, "constituent": agg.constituent_count,
              "expected": agg.expected_count, "written": agg.written,
@@ -580,6 +584,111 @@ def backfill_daily_flow(
     return {"scope": scope, "subjects_total": len(subjects), "subjects_ok": subjects_ok,
             "subjects_failed": subjects_failed, "rows_written": rows_written,
             "throttled": throttled, "days": days}
+
+
+def backfill_price_history(
+    conn,
+    *,
+    source,                       # HistorySource（baostock），有 fetch_price_history
+    scope: str = "stock",
+    days: int = 30,
+    as_of_date: str | None = None,
+    source_code: str = "baostock",
+    caliber: Caliber = Caliber.EASTMONEY,
+    adjust: str = "qfq",
+    limit: int | None = None,
+    clock: "Clock | None" = None,
+    progress: "object | None" = None,
+) -> dict:
+    """baostock 历史行情回填（价/量/额，无资金流），coverage_range 驱动增量补缺（US2/D5）。
+
+    对每个个股：查 coverage_range 缺口 → 只请求缺口区间 → 写 daily_final 观测 →
+    合并更新已存区间。二次回填仅补缺（SC-003）。幂等、单主体隔离、无前视。
+    """
+    import time as _time
+    from datetime import date as _date, datetime as _dt, timedelta, timezone as _tz
+
+    from quantchive.core.money import to_basis_points, to_cents, to_micro
+    from quantchive.core.trading_calendar import SHANGHAI_TZ, SystemClock
+    from quantchive.dao.coverage_dao import CoverageDao
+    from quantchive.models.enums import AmountUnit, AssetClass, SubjectKind, SubjectLevel
+
+    clock = clock or SystemClock()
+    today = (as_of_date or clock.now().astimezone(SHANGHAI_TZ).date().isoformat())
+    want_start = (_date.fromisoformat(today) - timedelta(days=days)).isoformat()
+    now_iso = _dt.now(_tz.utc).isoformat()
+    unit = AmountUnit.YUAN if caliber is Caliber.EASTMONEY else AmountUnit.YI
+
+    subject_dao = SubjectDao(conn)
+    obs_dao = ObservationDao(conn)
+    cov_dao = CoverageDao(conn)
+    run_dao = RunDao(conn)
+    subjects = subject_dao.list_by(
+        asset_class=AssetClass.A_SHARE, level=SubjectLevel.INSTRUMENT,
+        subject_kind=SubjectKind.STOCK)
+    if limit is not None:
+        subjects = subjects[:limit]
+
+    run_id = run_dao.start(
+        source_code=source_code, run_type=RunType.EOD_BACKFILL, caliber=caliber,
+        trade_date=today, minute_slot="EOD", adapter_version="baostock-v1",
+        subject_scope="backfill:price_hist", asset_class_code=AssetClass.A_SHARE.value)
+
+    counters = {"rows": 0, "skipped": 0, "done": 0}
+
+    def _fetch_one(s: dict) -> int:
+        """回填单个主体：查缺口→补缺→写→更区间。返回该主体写入行数（0=已覆盖）。"""
+        gaps = cov_dao.missing_gaps(
+            subject_id=s["subject_id"], metric_kind="price_hist", granularity="daily",
+            source_code=source_code, want_start=want_start, want_end=today)
+        if not gaps:
+            counters["skipped"] += 1               # 已全覆盖，零请求（SC-003）
+            return 0
+        wrote = 0
+        for gap_start, gap_end in gaps:
+            bars = source.fetch_price_history(
+                symbol=s["source_symbol"], exchange=s.get("exchange"),
+                start_date=gap_start, end_date=gap_end, granularity="daily", adjust=adjust)
+            for o in bars:
+                if not o.trade_date:
+                    continue
+                obs_dao.upsert(
+                    subject_id=s["subject_id"], source_code=source_code,
+                    trade_date=o.trade_date, minute_slot="EOD",
+                    value_type=ValueType.DAILY_FINAL, granularity="daily",
+                    observed_at=now_iso,
+                    price_micro=(None if o.price is None else to_micro(o.price)),
+                    change_pct_bp=(None if o.change_pct is None else to_basis_points(o.change_pct)),
+                    volume=(None if o.volume is None else int(o.volume)),
+                    turnover_cents=(None if o.turnover is None else to_cents(o.turnover, unit)),
+                    source_unit=unit.value, ingestion_run_id=run_id, created_at=now_iso)
+                wrote += 1
+        if wrote:
+            cov_dao.upsert_range(
+                subject_id=s["subject_id"], metric_kind="price_hist", granularity="daily",
+                source_code=source_code, start_date=want_start, end_date=today)
+        counters["rows"] += wrote
+        return wrote
+
+    def _tracked(s: dict) -> int:
+        r = _fetch_one(s)
+        counters["done"] += 1
+        if progress is not None:
+            progress(counters["done"], len(subjects), s["display_name"])
+        return r
+
+    # 采集纪律基类：失败标的分轮重试（US4/FR-016），单写者串行
+    outcome = run_per_subject(subjects, _tracked, sleep=_time.sleep, max_rounds=2)
+    subjects_ok = len(outcome.ok)
+    subjects_failed = len(outcome.failed)
+    rows_written = counters["rows"]
+    skipped_covered = counters["skipped"]
+
+    run_dao.finish(run_id, status=RunStatus.SUCCESS, subjects_ok=subjects_ok,
+                   subjects_failed=subjects_failed, used_source_code=source_code)
+    return {"scope": scope, "subjects_total": len(subjects), "subjects_ok": subjects_ok,
+            "subjects_failed": subjects_failed, "rows_written": rows_written,
+            "skipped_covered": skipped_covered, "days": days}
 
 
 def collect_etf_observations_once(

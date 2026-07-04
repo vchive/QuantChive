@@ -57,6 +57,7 @@ def run_target(conn: sqlite3.Connection, target: str) -> object:
     from quantchive.core.settings import get_settings
     from quantchive.datasource.em_etf_src import EastMoneyEtfSource
     from quantchive.datasource.em_sector_src import EastMoneySource
+    from quantchive.datasource._http_client import default_http_get
     from quantchive.datasource.em_stock_src import EastMoneyStockSource
 
     settings = get_settings()
@@ -66,17 +67,17 @@ def run_target(conn: sqlite3.Connection, target: str) -> object:
             sector_types=(SectorType.INDUSTRY, SectorType.CONCEPT),
             adapter_version="push2delay-v2")
         return collect_sector_observations_once(
-            req, source=EastMoneySource(), observation_dao=ObservationDao(conn),
+            req, source=EastMoneySource(http_get=default_http_get()), observation_dao=ObservationDao(conn),
             run_dao=RunDao(conn), subject_dao=SubjectDao(conn))
     if target == "stock":
         return collect_stock_observations_once(
-            source=EastMoneyStockSource(), observation_dao=ObservationDao(conn),
+            source=EastMoneyStockSource(http_get=default_http_get()), observation_dao=ObservationDao(conn),
             run_dao=RunDao(conn), subject_dao=SubjectDao(conn),
             aggregator=MarketAggregator(conn, threshold=settings.market_coverage_threshold),
             adapter_version="push2delay-stock-v1")
     if target == "etf":
         return collect_etf_observations_once(
-            source=EastMoneyEtfSource(), observation_dao=ObservationDao(conn),
+            source=EastMoneyEtfSource(http_get=default_http_get()), observation_dao=ObservationDao(conn),
             subject_dao=SubjectDao(conn), run_dao=RunDao(conn),
             adapter_version="push2delay-etf-v1")
     raise ValueError(f"未知 target={target}")
