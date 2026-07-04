@@ -31,6 +31,7 @@ from quantchive.service.ingest_service import (
     collect_sector_observations_once,
     collect_stock_observations_once,
 )
+from quantchive.cli.collect_lock import CollectLock, CollectLockError
 from quantchive.datasource._http_client import default_http_get
 from quantchive.service.market_aggregate import MarketAggregator
 
@@ -44,8 +45,8 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--sector-type", default="industry,concept")
     parser.add_argument("--scope", default="stock", choices=["stock"],
                         help="backfill: 回填个股历史")
-    parser.add_argument("--source", default="baostock", choices=["baostock", "eastmoney"],
-                        help="backfill: 历史源（baostock 价量历史/不限流；eastmoney 资金流历史/受限流）")
+    parser.add_argument("--source", default="baostock", choices=["baostock", "sina", "eastmoney"],
+                        help="backfill: 历史源（baostock 价量/不限流；sina 资金流/不限流；eastmoney 资金流/受限流）")
     parser.add_argument("--metric", default="price_hist", choices=["price_hist", "money_flow"],
                         help="backfill: 指标类别")
     parser.add_argument("--days", type=int, default=30, help="backfill: 回填交易日数")
@@ -57,14 +58,35 @@ def main(argv: list[str] | None = None) -> None:
     conn = connect(settings.db_path)
     init_db(conn)
 
+    # 采集互斥：防两个 collect 并发写 SQLite 单写者库（否则 run_id 交叉/行错乱）
+    try:
+        _lock = CollectLock(settings.db_path)
+        _lock.acquire()
+    except CollectLockError as exc:
+        print(f"✗ {exc}", file=sys.stderr)
+        sys.exit(2)
+
     # backfill：历史回填（逐主体自动提交，不包大事务）
     if args.target == "backfill":
         def _prog(done, total, name):
             if done % 100 == 0 or done == total:
                 print(f"  回填 {done}/{total} … {name}", flush=True)
 
+        # 新浪个股历史资金流（独立于东财限流，多源扩展）
+        if args.source == "sina":
+            from quantchive.datasource.sina_flow_src import SinaFlowSource
+            from quantchive.service.ingest_service import backfill_flow_history
+            summary = backfill_flow_history(
+                conn, source=SinaFlowSource(), days=args.days, source_code="sina_flow",
+                limit=args.limit, progress=_prog)
+            _log.info("资金流历史回填完成", extra={"context": summary})
+            print(f"backfill[sina/money_flow]: 主体 {summary['subjects_ok']}/{summary['subjects_total']} "
+                  f"· 日线行 {summary['rows_written']} · {summary['days']}天 "
+                  f"· 跳过已存 {summary['skipped_covered']} · 失败 {summary['subjects_failed']}")
+            sys.exit(1 if summary["rows_written"] == 0 and summary["skipped_covered"] == 0 else 0)
+
         # baostock 价量历史（独立于东财限流，US2/D4）
-        if args.source == "baostock" or args.metric == "price_hist":
+        if args.source == "baostock":
             from quantchive.datasource.baostock_src import BaostockSource
             from quantchive.service.ingest_service import backfill_price_history
             summary = backfill_price_history(

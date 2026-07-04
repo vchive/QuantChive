@@ -19,6 +19,7 @@ from quantchive.core.trading_calendar import SHANGHAI_TZ, Clock, SystemClock, Tr
 from quantchive.dao.constituent_dao import ConstituentDao
 from quantchive.dao.observation_dao import ObservationDao, ObservationRow
 from quantchive.dao.subject_dao import SubjectDao
+from quantchive.datasource.metric_source import REALTIME_SOURCE, resolve_metric_sources
 from quantchive.models.enums import (
     AssetClass,
     Caliber,
@@ -211,13 +212,16 @@ class QueryService:
         today = (as_of or self._cal.latest_trading_day(td) or td)
         value_type = ValueType.DAILY_FINAL if td < today else ValueType.INTRADAY_SNAPSHOT
         # slot 必须限定在板块主体集内（多 target 共用 source，slot 不同，防串味查空）
+        # source 限定实时源（spec004：多源共存后防跨源 slot/行串味）
         slot = self._obs.latest_slot_for_subjects(
-            subject_ids=subject_ids, trade_date=td, value_type=value_type)
+            subject_ids=subject_ids, trade_date=td, value_type=value_type,
+            source_code=REALTIME_SOURCE)
         if slot is None:
             value_type = (ValueType.INTRADAY_SNAPSHOT
                           if value_type is ValueType.DAILY_FINAL else ValueType.DAILY_FINAL)
             slot = self._obs.latest_slot_for_subjects(
-                subject_ids=subject_ids, trade_date=td, value_type=value_type)
+                subject_ids=subject_ids, trade_date=td, value_type=value_type,
+                source_code=REALTIME_SOURCE)
         if slot is None:
             raise NoDataForDate(f"{td} 无板块观测", detail={"trade_date": td})
 
@@ -225,6 +229,7 @@ class QueryService:
         rows = self._obs.ranking_snapshot(
             subject_ids=subject_ids, trade_date=td, value_type=value_type,
             minute_slot=slot, sort_by=sort_by, top_n=len(subject_ids) or 1, descending=True,
+            source_code=REALTIME_SOURCE,
         )
         items = [_obs_to_item(r) for r in rows]
         has_five_tier = self._registry.has_five_tier(
@@ -288,11 +293,15 @@ class QueryService:
         is_history = as_of is not None and as_of < today
         if is_history:
             value_type, slot = ValueType.DAILY_FINAL, "EOD"
+            # 历史按指标权威源（main_net→sina、price→baostock），单源防重复
+            drill_source = resolve_metric_sources(sort_by)[0]
         else:
             value_type, slot = ValueType.INTRADAY_LATEST, "LATEST"
+            drill_source = REALTIME_SOURCE
         rows = self._obs.ranking_snapshot(
             subject_ids=member_ids, trade_date=td, value_type=value_type,
             minute_slot=slot, sort_by=sort_by, top_n=len(member_ids), descending=True,
+            source_code=drill_source,
         )
         items = [_obs_to_item(r) for r in rows]
         has_five_tier = self._registry.has_five_tier(
@@ -333,12 +342,14 @@ class QueryService:
                 asset_class=asset_class, level=SubjectLevel.INSTRUMENT, subject_kind=kind)
         ]
         slot = self._obs.latest_slot_for_subjects(
-            subject_ids=subject_ids, trade_date=td, value_type=value_type)
+            subject_ids=subject_ids, trade_date=td, value_type=value_type,
+            source_code=REALTIME_SOURCE)
         if slot is None:
             raise NoDataForDate(f"{td} 无 ETF 观测", detail={"trade_date": td})
         rows = self._obs.ranking_snapshot(
             subject_ids=subject_ids, trade_date=td, value_type=value_type,
             minute_slot=slot, sort_by=sort_by, top_n=top_n, descending=True,
+            source_code=REALTIME_SOURCE,
         )
         items = [_obs_to_item(r) for r in rows]
         prov = DataProvenance(
@@ -413,7 +424,7 @@ class QueryService:
                 f"{td} 超出 {self._retention} 天保留窗",
                 detail={"trade_date": td, "retention_days": self._retention})
 
-        rows = self._obs.series(subject_id=subject_id, trade_date=td)
+        rows = self._obs.series(subject_id=subject_id, trade_date=td, source_code=REALTIME_SOURCE)
         points: list[SeriesPoint] = []
         gap_count = 0
         granularities: set[str] = set()
@@ -448,8 +459,18 @@ class QueryService:
         return row[0] if row and row[0] else None
 
     def _daily_series(self, subject_id, subject, metric: SortField) -> SubjectSeriesResult:
-        """跨交易日日线历史（daily_final 回填）。ts=trade_date，一天一点。"""
-        rows = self._obs.series_daily(subject_id=subject_id, days=self._retention)
+        """跨交易日日线历史（daily_final 回填）。ts=trade_date，一天一点。
+
+        多源解析（spec004）：按指标优先级逐日取权威源（main_net 取新浪、price 取 baostock）。
+        """
+        from quantchive.datasource.metric_source import (
+            metric_nonnull_column,
+            resolve_metric_sources,
+        )
+        rows = self._obs.series_daily(
+            subject_id=subject_id, days=self._retention,
+            sources=resolve_metric_sources(metric),
+            nonnull_column=metric_nonnull_column(metric))
         if not rows:
             raise NoDataForDate(
                 f"主体 {subject['display_name']} 无日线历史（需回填 quantchive-collect --target backfill）",
@@ -484,7 +505,7 @@ class QueryService:
             raise NoDataForDate(
                 self._market_gate_reason(), detail={"asset_class": asset_class.value})
         row = self._obs.latest_market_point(
-            market_subject_id=market_id, trade_date=trade_date)
+            market_subject_id=market_id, trade_date=trade_date, source_code=REALTIME_SOURCE)
         if row is None:
             raise NoDataForDate(
                 self._market_gate_reason(), detail={"asset_class": asset_class.value})

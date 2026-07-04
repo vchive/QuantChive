@@ -29,8 +29,8 @@ _SORT_COLUMN = {
 }
 
 _OBS_COLS = (
-    "o.observation_id, o.subject_id, s.source_symbol, s.display_name, o.trade_date, "
-    "o.minute_slot, o.value_type, o.granularity, o.observed_at, "
+    "o.observation_id, o.subject_id, s.source_symbol, s.display_name, o.source_code, "
+    "o.trade_date, o.minute_slot, o.value_type, o.granularity, o.observed_at, "
     "o.net_amount_cents, o.main_net_cents, o.super_large_net_cents, o.large_net_cents, "
     "o.medium_net_cents, o.small_net_cents, o.price_micro, o.change_pct_bp, o.volume, "
     "o.turnover_cents, o.turnover_pct_bp, o.constituent_count, o.expected_count, o.is_derived"
@@ -43,6 +43,7 @@ class ObservationRow:
     subject_id: int
     source_symbol: str
     display_name: str
+    source_code: str
     trade_date: str
     minute_slot: str
     value_type: str
@@ -90,7 +91,7 @@ class ObservationDao:
                 constituent_count, expected_count, source_unit, raw_value, is_derived,
                 ingestion_run_id, created_at)
                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-               ON CONFLICT(subject_id, trade_date, value_type, minute_slot) DO UPDATE SET
+               ON CONFLICT(subject_id, source_code, trade_date, value_type, minute_slot) DO UPDATE SET
                  net_amount_cents=excluded.net_amount_cents,
                  main_net_cents=excluded.main_net_cents,
                  super_large_net_cents=excluded.super_large_net_cents,
@@ -115,11 +116,11 @@ class ObservationDao:
         )
         # cur.lastrowid 在 ON CONFLICT DO UPDATE 路径不更新（保留上一次 INSERT 的连接级
         # 陈旧值），据其判 INSERT/UPDATE 会返回错误 observation_id（跨主体污染）。
-        # 无条件按幂等业务键回查，版本无关、恒正确。
+        # 无条件按幂等业务键回查，版本无关、恒正确。业务键含 source_code（多源共存）。
         row = self._conn.execute(
             """SELECT observation_id FROM observation
-               WHERE subject_id=? AND trade_date=? AND value_type=? AND minute_slot=?""",
-            (subject_id, trade_date, value_type.value, minute_slot),
+               WHERE subject_id=? AND source_code=? AND trade_date=? AND value_type=? AND minute_slot=?""",
+            (subject_id, source_code, trade_date, value_type.value, minute_slot),
         ).fetchone()
         return int(row[0])
 
@@ -145,84 +146,129 @@ class ObservationDao:
 
     def latest_slot_for_subjects(
         self, *, subject_ids: list[int], trade_date: str, value_type: ValueType,
+        source_code: str | None = None,
     ) -> str | None:
         """给定 subject 集内的最新真实 minute_slot。
 
         必须按 subject 集限定——多 target 共用 source_code='eastmoney' 且各自 batch_slot
         不同（板块 19:47、大盘求和 19:53…），若只按 source 取 MAX 会串味：板块排行会
         错用大盘的 slot 而查空。故排行的 slot 解析必须限定在被排主体集内。
+        source_code（spec004）：多源共存后限定实时源，防跨源 slot 串味。
         """
         if not subject_ids:
             return None
         placeholders = ",".join("?" * len(subject_ids))
+        src_clause = " AND source_code=?" if source_code else ""
+        params = [*subject_ids, trade_date, value_type.value]
+        if source_code:
+            params.append(source_code)
         row = self._conn.execute(
             f"""SELECT MAX(minute_slot) FROM observation
                WHERE subject_id IN ({placeholders})
-                 AND trade_date=? AND value_type=? AND minute_slot!='LATEST'""",
-            (*subject_ids, trade_date, value_type.value),
+                 AND trade_date=? AND value_type=? AND minute_slot!='LATEST'{src_clause}""",
+            tuple(params),
         ).fetchone()
         return row[0] if row and row[0] else None
 
     def ranking_snapshot(
         self, *, subject_ids: list[int], trade_date: str, value_type: ValueType,
         minute_slot: str, sort_by: SortField, top_n: int, descending: bool = True,
+        source_code: str | None = None,
     ) -> list[ObservationRow]:
         """取给定 subject 集在某时点的观测，按 sort_by 排序，DB 层 LIMIT top_n。
 
         subject 集由 Service 先经 subject/membership 缩小（避免跨 8048 主体全表扫，
         critique 裁定）。ORDER BY..LIMIT 下推——5535 股不全量物化。
+        source_code（spec004）：多源共存后限定源，防一股多源行重复排入榜。
         """
         if not subject_ids:
             return []
         col = _SORT_COLUMN[sort_by]
         direction = "DESC" if descending else "ASC"
         placeholders = ",".join("?" * len(subject_ids))
+        src_clause = " AND o.source_code=?" if source_code else ""
+        params = [*subject_ids, trade_date, value_type.value, minute_slot]
+        if source_code:
+            params.append(source_code)
+        params.append(top_n)
         rows = self._conn.execute(
             f"""SELECT {_OBS_COLS}
                FROM observation o JOIN subject s ON s.subject_id = o.subject_id
                WHERE o.subject_id IN ({placeholders})
-                 AND o.trade_date=? AND o.value_type=? AND o.minute_slot=?
+                 AND o.trade_date=? AND o.value_type=? AND o.minute_slot=?{src_clause}
                  AND o.{col} IS NOT NULL
                ORDER BY o.{col} {direction}, o.subject_id ASC
                LIMIT ?""",
-            (*subject_ids, trade_date, value_type.value, minute_slot, top_n),
+            tuple(params),
         ).fetchall()
         return [ObservationRow(*r) for r in rows]
 
     def series(
-        self, *, subject_id: int, trade_date: str,
+        self, *, subject_id: int, trade_date: str, source_code: str | None = None,
     ) -> list[ObservationRow]:
         """单主体某日分钟序列，升序。排除 intraday_latest 覆盖行、过滤 'LATEST' 槽
 
         （防 'LATEST' 字符串混入按 minute_slot 排序产生假点，critique 裁定）。
+        source_code（spec004）：多源共存后限定源，防一 slot 多源行重复成点。
         """
+        src_clause = " AND o.source_code=?" if source_code else ""
+        params = [subject_id, trade_date]
+        if source_code:
+            params.append(source_code)
         rows = self._conn.execute(
             f"""SELECT {_OBS_COLS}
                FROM observation o JOIN subject s ON s.subject_id = o.subject_id
                WHERE o.subject_id=? AND o.trade_date=?
-                 AND o.value_type!='intraday_latest' AND o.minute_slot!='LATEST'
+                 AND o.value_type!='intraday_latest' AND o.minute_slot!='LATEST'{src_clause}
                ORDER BY o.minute_slot ASC""",
-            (subject_id, trade_date),
+            tuple(params),
         ).fetchall()
         return [ObservationRow(*r) for r in rows]
 
     def series_daily(
         self, *, subject_id: int, days: int = 30,
+        sources: list[str] | None = None, nonnull_column: str | None = None,
     ) -> list[ObservationRow]:
         """单主体跨交易日的日线序列（daily_final），按 trade_date 升序。历史回填读此。
 
         取最近 days 个交易日的 EOD 日终点——盘中快照攒不出的历史深度由日线回填提供。
+        多源解析（spec004）：sources 给定源优先级 → 逐 trade_date 取首个「该指标列非空」的
+        权威源行（窗口函数 ROW_NUMBER 按源优先级排序）。sources=None 则不限源（兼容旧行为）。
         """
+        if not sources:
+            rows = self._conn.execute(
+                f"""SELECT * FROM (
+                       SELECT {_OBS_COLS}
+                       FROM observation o JOIN subject s ON s.subject_id = o.subject_id
+                       WHERE o.subject_id=? AND o.value_type='daily_final'
+                       ORDER BY o.trade_date DESC LIMIT ?
+                   ) ORDER BY trade_date ASC""",
+                (subject_id, days),
+            ).fetchall()
+            return [ObservationRow(*r) for r in rows]
+
+        placeholders = ",".join("?" * len(sources))
+        # 源优先级 CASE：优先源 rank 小。非空列参与排序（该指标有值的源排前）
+        case_rank = " ".join(
+            f"WHEN o.source_code='{sc}' THEN {i}" for i, sc in enumerate(sources))
+        col = nonnull_column or "main_net_cents"
         rows = self._conn.execute(
             f"""SELECT * FROM (
-                   SELECT {_OBS_COLS}
+                   SELECT {_OBS_COLS},
+                          ROW_NUMBER() OVER (
+                            PARTITION BY o.trade_date
+                            ORDER BY (CASE WHEN o.{col} IS NULL THEN 1 ELSE 0 END),
+                                     (CASE {case_rank} ELSE 999 END)) AS _rn
                    FROM observation o JOIN subject s ON s.subject_id = o.subject_id
                    WHERE o.subject_id=? AND o.value_type='daily_final'
-                   ORDER BY o.trade_date DESC LIMIT ?
-               ) ORDER BY trade_date ASC""",
-            (subject_id, days),
+                     AND o.source_code IN ({placeholders})
+               ) WHERE _rn=1
+               ORDER BY trade_date DESC LIMIT ?""",
+            (subject_id, *sources, days),
         ).fetchall()
-        return [ObservationRow(*r) for r in rows]
+        # 去掉尾部 _rn 列，升序返回
+        ordered = sorted((ObservationRow(*r[:-1]) for r in rows), key=lambda x: x.trade_date)
+        return ordered
 
     def earliest_trade_date(self) -> str | None:
         row = self._conn.execute("SELECT MIN(trade_date) FROM observation").fetchone()
@@ -266,46 +312,68 @@ class ObservationDao:
 
     def stock_rows_for(
         self, *, trade_date: str, value_type: ValueType, minute_slot: str,
+        source_code: str | None = None,
     ) -> list[ObservationRow]:
-        """取某时点全部个股观测（level='instrument' AND kind='stock'）——大盘求和用。"""
+        """取某时点全部个股观测（level='instrument' AND kind='stock'）——大盘求和用。
+
+        source_code（spec004）：多源共存后限定源，防一股多源 LATEST 行被重复求和、
+        component_hash 含重复符号。
+        """
+        src_clause = " AND o.source_code=?" if source_code else ""
+        params = [trade_date, value_type.value, minute_slot]
+        if source_code:
+            params.append(source_code)
         rows = self._conn.execute(
             f"""SELECT {_OBS_COLS}
                FROM observation o JOIN subject s ON s.subject_id = o.subject_id
-               WHERE o.trade_date=? AND o.value_type=? AND o.minute_slot=?
+               WHERE o.trade_date=? AND o.value_type=? AND o.minute_slot=?{src_clause}
                  AND s.level='instrument' AND s.subject_kind='stock'""",
-            (trade_date, value_type.value, minute_slot),
+            tuple(params),
         ).fetchall()
         return [ObservationRow(*r) for r in rows]
 
     def get_point(
         self, *, subject_id: int, trade_date: str, value_type: ValueType, minute_slot: str,
+        source_code: str | None = None,
     ) -> ObservationRow | None:
+        src_clause = " AND o.source_code=?" if source_code else ""
+        params = [subject_id, trade_date, value_type.value, minute_slot]
+        if source_code:
+            params.append(source_code)
         row = self._conn.execute(
             f"""SELECT {_OBS_COLS}
                FROM observation o JOIN subject s ON s.subject_id = o.subject_id
-               WHERE o.subject_id=? AND o.trade_date=? AND o.value_type=? AND o.minute_slot=?""",
-            (subject_id, trade_date, value_type.value, minute_slot),
+               WHERE o.subject_id=? AND o.trade_date=? AND o.value_type=? AND o.minute_slot=?{src_clause}""",
+            tuple(params),
         ).fetchone()
         return ObservationRow(*row) if row else None
 
     def latest_market_point(
         self, *, market_subject_id: int, trade_date: str | None = None,
+        source_code: str | None = None,
     ) -> ObservationRow | None:
-        """大盘最新求和点（is_derived=1）。trade_date=None 取全期最新。"""
+        """大盘最新求和点（is_derived=1）。trade_date=None 取全期最新。
+
+        source_code（spec004）：大盘 subject 本已按源建（market_subject_id 编码源），
+        此参数为多源安全冗余，限定 derived 行的源。
+        """
+        src_clause = " AND o.source_code=?" if source_code else ""
         if trade_date is None:
+            params = [market_subject_id] + ([source_code] if source_code else [])
             row = self._conn.execute(
                 f"""SELECT {_OBS_COLS}
                    FROM observation o JOIN subject s ON s.subject_id = o.subject_id
-                   WHERE o.subject_id=? AND o.is_derived=1
+                   WHERE o.subject_id=? AND o.is_derived=1{src_clause}
                    ORDER BY o.trade_date DESC, o.minute_slot DESC LIMIT 1""",
-                (market_subject_id,),
+                tuple(params),
             ).fetchone()
         else:
+            params = [market_subject_id, trade_date] + ([source_code] if source_code else [])
             row = self._conn.execute(
                 f"""SELECT {_OBS_COLS}
                    FROM observation o JOIN subject s ON s.subject_id = o.subject_id
-                   WHERE o.subject_id=? AND o.trade_date=? AND o.is_derived=1
+                   WHERE o.subject_id=? AND o.trade_date=? AND o.is_derived=1{src_clause}
                    ORDER BY o.minute_slot DESC LIMIT 1""",
-                (market_subject_id, trade_date),
+                tuple(params),
             ).fetchone()
         return ObservationRow(*row) if row else None

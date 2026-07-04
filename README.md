@@ -53,17 +53,37 @@ uv run pytest
 | **增量补缺** | `coverage_range` 记「主体×指标已存区间」，二次回填仅补缺口、零冗余请求 |
 | **多源故障切换** | 资金流 东财(主)/**同花顺 10jqka**(备，独立后端) 双活；主源限流自动切备源、审计实际用源 |
 | **采集纪律** | 单写者 + 请求间节流 + 失败标的分轮重试 + 完整性校验重取 |
+| **采集互斥锁** | 文件锁防两个 collect 并发写坏 SQLite 单写者库（第二个采集被拒） |
 
 > 换源/加源不改上层（`ObservationSource`/`HistorySource` Protocol + 选源工厂）。同花顺 `hexin-v` 头依赖 JS 生成，首用需小流量验证（验不过降级预留，不阻塞）。
+
+## 多源观测数据模型（spec004 · source_code 进观测身份）
+
+`observation` 唯一键含 `source_code`：`(subject_id, source_code, trade_date, value_type, minute_slot)`——同股同日多源观测**共存不覆盖**（baostock 价 + 新浪五档流 + 东财实时各一行）。
+
+查询层**按指标解析权威源**（`metric_source.py`）：查某指标逐日取优先源的非空值。
+
+| 指标 | 权威源优先级 |
+|---|---|
+| 资金流五档（main_net 等）| **新浪**(8年五档不限流) > 东财 > 同花顺 |
+| 价/涨跌 | **baostock**(复权深) > 新浪 > 东财 |
+| 量 | baostock > 东财 |
+
+排行/大盘/盘中是实时量，显式限定实时源（东财），防一股多源行重复计数。
+
+**新浪个股历史资金流**（`sina_flow_src.py`）：`vip.stock.finance.sina.com.cn` MoneyFlow 接口，独立于东财、约 8 年逐日五档、`r0_net+r1_net=主力净额`、不限流。命令：
+```bash
+uv run quantchive-collect --target backfill --source sina --days 60   # 个股资金流历史
+```
 
 ## 两种时序数据（重要）
 
 | | 来源 | 深度 | 前端 |
 |---|---|---|---|
-| **日线历史** | baostock 价量历史 / 东财 fflow 资金流（`--target backfill`）| baostock 回溯多年、东财约 120 交易日 | series 视图默认「日线历史」|
+| **日线历史** | baostock 价量 / 新浪·东财 资金流（`--target backfill`）| baostock/新浪 多年、东财约 120 交易日 | series 视图默认「日线历史」|
 | **盘中分钟** | clist 快照轮询（调度器/反复 collect）| 只能**向前积累**——运行采集器之后才有 | series 视图「当日分钟」|
 
-> baostock 提供历史**价/量/额**（不受东财限流）；历史**资金流**由东财 fflow 或同花顺提供。
+> baostock 提供历史**价/量/额**、新浪提供历史**资金流五档**（均不受东财限流）。
 > 盘中每分钟资金流只能从今天开始采、明天才有"昨天全天"。
 
 ## 自动采集调度

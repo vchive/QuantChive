@@ -157,8 +157,8 @@ CREATE TABLE IF NOT EXISTS observation (
     CHECK (main_net_cents IS NOT NULL OR price_micro IS NOT NULL OR volume IS NOT NULL
            OR turnover_cents IS NOT NULL OR net_amount_cents IS NOT NULL)
 );
-CREATE UNIQUE INDEX IF NOT EXISTS uq_observation ON observation (subject_id, trade_date, value_type, minute_slot);
-CREATE INDEX IF NOT EXISTS idx_obs_ranking ON observation (trade_date, value_type, minute_slot, subject_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_observation ON observation (subject_id, source_code, trade_date, value_type, minute_slot);
+CREATE INDEX IF NOT EXISTS idx_obs_ranking ON observation (trade_date, value_type, minute_slot, source_code, subject_id);
 CREATE INDEX IF NOT EXISTS idx_obs_trade_date ON observation (trade_date);
 
 -- v2.7 稀疏指标附表

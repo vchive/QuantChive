@@ -64,6 +64,11 @@ def _ths_flow():
     return ThsFlowSource()
 
 
+def _sina_flow():
+    from quantchive.datasource.sina_flow_src import SinaFlowSource
+    return SinaFlowSource()
+
+
 # source_id → 构造器（惰性，避免导入期副作用）。缺失 → NoOpSource。
 _OBSERVATION_SOURCES: dict[str, Callable[[], object]] = {
     "eastmoney": _em_sector,
@@ -72,6 +77,7 @@ _OBSERVATION_SOURCES: dict[str, Callable[[], object]] = {
 }
 _HISTORY_SOURCES: dict[str, Callable[[], object]] = {
     "baostock": _baostock,
+    "sina_flow": _sina_flow,       # 个股历史资金流（独立于东财）
 }
 
 

@@ -11,6 +11,7 @@ def _stock(symbol: str, main: int | None) -> ObservationRow:
     tiers = (main, main, main, main, main) if main is not None else (None,) * 5
     return ObservationRow(
         observation_id=0, subject_id=0, source_symbol=symbol, display_name=symbol,
+        source_code="eastmoney",
         trade_date="2026-07-03", minute_slot="LATEST", value_type="intraday_latest",
         granularity="5min", observed_at="t", net_amount_cents=main,
         main_net_cents=tiers[0], super_large_net_cents=tiers[1], large_net_cents=tiers[2],

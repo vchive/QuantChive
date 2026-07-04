@@ -105,9 +105,13 @@ class MarketAggregator:
         source_code: str, ingestion_run_id: int, created_at: str,
         stock_value_type: ValueType = ValueType.INTRADAY_LATEST, stock_slot: str = "LATEST",
     ) -> MarketAggregate:
-        """求和个股 LATEST 行写大盘点。复用传入 batch_slot（禁 clock.now()）。"""
+        """求和个股 LATEST 行写大盘点。复用传入 batch_slot（禁 clock.now()）。
+
+        source_code 限定求和的源（spec004：多源共存后防一股多源 LATEST 被重复求和）。
+        """
         rows = self._obs.stock_rows_for(
-            trade_date=trade_date, value_type=stock_value_type, minute_slot=stock_slot)
+            trade_date=trade_date, value_type=stock_value_type, minute_slot=stock_slot,
+            source_code=source_code)
         agg = aggregate_stock_cents(
             rows, expected_count=expected_count, threshold=self._threshold)
         if not agg.written:

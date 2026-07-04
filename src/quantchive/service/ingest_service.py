@@ -664,9 +664,17 @@ def backfill_price_history(
                     source_unit=unit.value, ingestion_run_id=run_id, created_at=now_iso)
                 wrote += 1
         if wrote:
-            cov_dao.upsert_range(
-                subject_id=s["subject_id"], metric_kind="price_hist", granularity="daily",
-                source_code=source_code, start_date=want_start, end_date=today)
+            # 读回校验：确认落库再记 coverage（防写丢却记区间→孤儿→永久跳过）
+            persisted = conn.execute(
+                """SELECT COUNT(*) FROM observation WHERE subject_id=? AND source_code=?
+                   AND value_type='daily_final'""",
+                (s["subject_id"], source_code)).fetchone()[0]
+            if persisted > 0:
+                cov_dao.upsert_range(
+                    subject_id=s["subject_id"], metric_kind="price_hist", granularity="daily",
+                    source_code=source_code, start_date=want_start, end_date=today)
+            else:
+                raise RuntimeError("observation 写入未落库（疑似并发/锁），不记 coverage")
         counters["rows"] += wrote
         return wrote
 
@@ -693,6 +701,119 @@ def backfill_price_history(
     return {"scope": scope, "subjects_total": len(subjects), "subjects_ok": subjects_ok,
             "subjects_failed": subjects_failed, "rows_written": rows_written,
             "skipped_covered": skipped_covered, "days": days}
+
+
+def backfill_flow_history(
+    conn,
+    *,
+    source,                       # SinaFlowSource，有 fetch_flow_history
+    days: int = 30,
+    as_of_date: str | None = None,
+    source_code: str = "sina_flow",
+    caliber: Caliber = Caliber.EASTMONEY,
+    limit: int | None = None,
+    sleep_sec: float = 0.3,
+    clock: "Clock | None" = None,
+    progress: "object | None" = None,
+) -> dict:
+    """个股历史资金流回填（新浪，五档净额），coverage_range 驱动增量补缺（多源扩展）。
+
+    独立于东财——东财 fflow 限流时仍可灌资金流历史。写 daily_final 五档观测。
+    sleep_sec 主体间节流（新浪虽宽松，仍礼貌节流防封）。幂等、单主体隔离、无前视。
+    """
+    import time as _time
+    from datetime import date as _date, datetime as _dt, timedelta, timezone as _tz
+
+    from quantchive.core.money import to_basis_points, to_cents, to_micro
+    from quantchive.core.trading_calendar import SHANGHAI_TZ, SystemClock
+    from quantchive.dao.coverage_dao import CoverageDao
+    from quantchive.models.enums import AmountUnit, AssetClass, SubjectKind, SubjectLevel
+
+    clock = clock or SystemClock()
+    today = (as_of_date or clock.now().astimezone(SHANGHAI_TZ).date().isoformat())
+    want_start = (_date.fromisoformat(today) - timedelta(days=days)).isoformat()
+    now_iso = _dt.now(_tz.utc).isoformat()
+    unit = AmountUnit.YUAN
+
+    subject_dao = SubjectDao(conn)
+    obs_dao = ObservationDao(conn)
+    cov_dao = CoverageDao(conn)
+    run_dao = RunDao(conn)
+    subjects = subject_dao.list_by(
+        asset_class=AssetClass.A_SHARE, level=SubjectLevel.INSTRUMENT,
+        subject_kind=SubjectKind.STOCK)
+    if limit is not None:
+        subjects = subjects[:limit]
+
+    run_id = run_dao.start(
+        source_code=source_code, run_type=RunType.EOD_BACKFILL, caliber=caliber,
+        trade_date=today, minute_slot="EOD", adapter_version="sina-moneyflow-v1",
+        subject_scope="backfill:money_flow", asset_class_code=AssetClass.A_SHARE.value)
+
+    counters = {"rows": 0, "skipped": 0, "done": 0}
+
+    def _fetch_one(s: dict) -> int:
+        gaps = cov_dao.missing_gaps(
+            subject_id=s["subject_id"], metric_kind="money_flow", granularity="daily",
+            source_code=source_code, want_start=want_start, want_end=today)
+        if not gaps:
+            counters["skipped"] += 1
+            return 0
+        wrote = 0
+        span_lo = min(g[0] for g in gaps)
+        span_hi = max(g[1] for g in gaps)
+        bars = source.fetch_flow_history(
+            symbol=s["source_symbol"], exchange=s.get("exchange"),
+            start_date=span_lo, end_date=span_hi)
+        for o in bars:
+            if not o.trade_date:
+                continue
+            obs_dao.upsert(
+                subject_id=s["subject_id"], source_code=source_code,
+                trade_date=o.trade_date, minute_slot="EOD",
+                value_type=ValueType.DAILY_FINAL, granularity="daily", observed_at=now_iso,
+                net_amount_cents=(None if o.main_net is None else to_cents(o.main_net, unit)),
+                price_micro=(None if o.price is None else to_micro(o.price)),
+                change_pct_bp=(None if o.change_pct is None else to_basis_points(o.change_pct)),
+                five_tier={
+                    "main_net_cents": to_cents(o.main_net, unit) if o.main_net is not None else 0,
+                    "super_large_net_cents": to_cents(o.super_large_net, unit) if o.super_large_net is not None else 0,
+                    "large_net_cents": to_cents(o.large_net, unit) if o.large_net is not None else 0,
+                    "medium_net_cents": to_cents(o.medium_net, unit) if o.medium_net is not None else 0,
+                    "small_net_cents": to_cents(o.small_net, unit) if o.small_net is not None else 0,
+                } if o.main_net is not None else None,
+                source_unit=unit.value, ingestion_run_id=run_id, created_at=now_iso)
+            wrote += 1
+        if wrote:
+            # 读回校验：确认 observation 真落库再记 coverage（防写丢却记区间→孤儿区间→永久跳过）
+            persisted = conn.execute(
+                """SELECT COUNT(*) FROM observation WHERE subject_id=? AND source_code=?
+                   AND value_type='daily_final' AND trade_date BETWEEN ? AND ?""",
+                (s["subject_id"], source_code, span_lo, span_hi)).fetchone()[0]
+            if persisted > 0:
+                cov_dao.upsert_range(
+                    subject_id=s["subject_id"], metric_kind="money_flow", granularity="daily",
+                    source_code=source_code, start_date=want_start, end_date=today)
+            else:
+                raise RuntimeError("observation 写入未落库（疑似并发/锁），不记 coverage")
+        counters["rows"] += wrote
+        return wrote
+
+    def _tracked(s: dict) -> int:
+        if sleep_sec > 0:
+            _time.sleep(sleep_sec)              # 主体间节流（礼貌，防封）
+        r = _fetch_one(s)
+        counters["done"] += 1
+        if progress is not None:
+            progress(counters["done"], len(subjects), s["display_name"])
+        return r
+
+    outcome = run_per_subject(subjects, _tracked, sleep=lambda x: None, max_rounds=2)
+    run_dao.finish(run_id, status=RunStatus.SUCCESS, subjects_ok=len(outcome.ok),
+                   subjects_failed=len(outcome.failed), used_source_code=source_code)
+    return {"scope": "stock", "subjects_total": len(subjects), "subjects_ok": len(outcome.ok),
+            "subjects_failed": len(outcome.failed), "rows_written": counters["rows"],
+            "skipped_covered": counters["skipped"], "days": days}
 
 
 def collect_etf_observations_once(

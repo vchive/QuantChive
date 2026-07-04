@@ -17,6 +17,8 @@ _SEED_SOURCES = [
     # spec003：baostock 历史行情源（无资金流）；ths_flow 同花顺资金流备源（初始停用，验 hexin-v 后启用）
     ("baostock", "baostock 历史行情", "baostock", 0, 1, "yuan", "baostock_src.BaostockSource", 1),
     ("ths_flow", "同花顺资金流", "ths", 1, 0, "yuan", "ths_flow_src.ThsFlowSource", 0),
+    # 新浪个股历史资金流（独立于东财，五档齐全，约8年深，实测可用）
+    ("sina_flow", "新浪资金流历史", "sina", 1, 1, "yuan", "sina_flow_src.SinaFlowSource", 1),
 ]
 
 # spec002 品种（预留位）
