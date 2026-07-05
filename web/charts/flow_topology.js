@@ -54,19 +54,38 @@ function renderFlowSankey(dom, data, onSectorClick) {
       data: nodes, links: links,
     }],
   });
-  // 点击行业节点 → 下钻。优先用节点自带 _sid（同 ranking 的可靠模式），
-  // 回退按 id 查原始节点。sankey 节点 click 的 pm.data 保留我们设的字段。
+  // 点击行业节点 → 下钻。ECharts sankey 节点图元 dataIndex 有时为 null，
+  // chart.on('click') 拿不到 data → 双保险：① 常规 click ② zrender 级手动命中矩形。
   const byId = {};
   data.nodes.forEach((n) => { byId[n.id] = n; });
+  const fire = (sid, name) => { if (sid != null && onSectorClick) onSectorClick(sid, name); };
   chart.on("click", (pm) => {
     const d = pm.data || {};
-    let sid = d._sid;
-    let name = d._label;
-    if (sid == null) {                       // 回退：按 id 回查
-      const orig = byId[d.name || pm.name];
-      if (orig) { sid = orig.subject_id; name = orig.name; }
+    if (d._sid != null) return fire(d._sid, d._label);
+    const orig = byId[d.name || pm.name];
+    if (orig) fire(orig.subject_id, orig.name);
+  });
+  // zrender 兜底：ECharts sankey 节点常不触发 chart.on('click')（节点图元 dataIndex 为
+  // null）。故在 zrender 层按像素命中 node 矩形。矩形按 series.data 顺序渲染，用序号对齐节点。
+  chart.getZr().on("click", (e) => {
+    const nodes = chart.getOption().series[0].data;
+    const list = chart.getZr().storage.getDisplayList();
+    const px = e.offsetX, py = e.offsetY;
+    let idx = 0;   // 第 idx 个 rect ↔ nodes[idx]
+    for (const el of list) {
+      if (el.type !== "rect") continue;
+      const r = el.getBoundingRect();
+      const t = el.transform || [1, 0, 0, 1, 0, 0];
+      // 图元本地 rect → 全局包围盒（sankey rect 无旋转，只缩放+平移）
+      const gx = t[0] * r.x + t[4], gy = t[3] * r.y + t[5];
+      const gw = r.width * t[0], gh = r.height * t[3];
+      if (px >= gx && px <= gx + gw && py >= gy && py <= gy + gh) {
+        const n = nodes[idx];
+        if (n && n._sid != null) fire(n._sid, n._label);
+        return;
+      }
+      idx++;
     }
-    if (sid != null && onSectorClick) onSectorClick(sid, name);
   });
   return chart;
 }
