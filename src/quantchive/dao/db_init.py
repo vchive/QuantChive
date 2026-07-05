@@ -19,6 +19,9 @@ _SEED_SOURCES = [
     ("ths_flow", "同花顺资金流", "ths", 1, 0, "yuan", "ths_flow_src.ThsFlowSource", 0),
     # 新浪个股历史资金流（独立于东财，五档齐全，约8年深，实测可用）
     ("sina_flow", "新浪资金流历史", "sina", 1, 1, "yuan", "sina_flow_src.SinaFlowSource", 1),
+    # spec005：百度当日四档gross(校验探针,无头浏览器,验证后启用)；tushare深历史备源(预留,需token)
+    ("baidu_flow", "百度资金流", "baidu", 1, 0, "yi", "baidu_flow_src.BaiduFlowSource", 0),
+    ("tushare_flow", "Tushare资金流", "tushare", 1, 1, "yuan", "tushare_flow_src.TushareFlowSource", 0),
 ]
 
 # spec002 品种（预留位）
@@ -90,6 +93,23 @@ def _alter_ingestion_run(conn: sqlite3.Connection) -> None:
     for col, decl in _RUN_ALTER_COLS:
         if col not in existing:
             conn.execute(f"ALTER TABLE ingestion_run ADD COLUMN {col} {decl}")
+
+
+# spec005：observation 四档 gross 列（幂等 ALTER；新库 schema.sql 已含）
+_OBS_ALTER_COLS = [
+    ("super_large_gross_cents", "INTEGER"),
+    ("large_gross_cents", "INTEGER"),
+    ("medium_gross_cents", "INTEGER"),
+    ("small_gross_cents", "INTEGER"),
+]
+
+
+def _alter_observation(conn: sqlite3.Connection) -> None:
+    """幂等给 observation 加 spec005 四档 gross 列（旧库；CHECK 靠入库校验，ALTER 不加约束）。"""
+    existing = {r[1] for r in conn.execute("PRAGMA table_info(observation)").fetchall()}
+    for col, decl in _OBS_ALTER_COLS:
+        if col not in existing:
+            conn.execute(f"ALTER TABLE observation ADD COLUMN {col} {decl}")
 
 
 _INGESTION_RUN_RELAXED_DDL = """
@@ -289,5 +309,6 @@ def init_db(conn: sqlite3.Connection) -> None:
     _relax_ingestion_run_check(conn)  # 旧库放宽 run_type CHECK（保数据表重建）
     _relax_data_source_check(conn)    # 旧库放宽 caliber CHECK（spec003 新源 baostock）
     _alter_ingestion_run(conn)
+    _alter_observation(conn)          # 旧库加 spec005 四档 gross 列
     seed_data_sources(conn)
     seed_spec002(conn)

@@ -55,6 +55,15 @@ class Settings(BaseSettings):
     # 历史回填默认深度（交易日），对齐保留窗
     backfill_default_days: int = Field(default=30, ge=1)
 
+    # ---- spec005 资金档位博弈（gross / 校验 / 盘中）----
+    # 跨源校验：量级差超此倍数判分歧（方向相反必判）；口径差异不报
+    flow_validate_magnitude_ratio: float = Field(default=3.0, gt=1)
+    # 百度校验探针：每次抽样股数 + 是否启用（无头浏览器慢，只做校验抽样）
+    baidu_probe_sample_size: int = Field(default=30, ge=1)
+    baidu_probe_enabled: bool = Field(default=False)   # 验证 hexin/反爬后启用
+    # 盘中分钟归档：三层保留（分钟7天已由 downsample_after_days，此为总窗）
+    intraday_archive_enabled: bool = Field(default=False)  # 调度器盘中归档开关
+
 
 
     # 采集间隔（秒）—— spec001 兼容保留

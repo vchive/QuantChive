@@ -32,7 +32,9 @@ _OBS_COLS = (
     "o.observation_id, o.subject_id, s.source_symbol, s.display_name, o.source_code, "
     "o.trade_date, o.minute_slot, o.value_type, o.granularity, o.observed_at, "
     "o.net_amount_cents, o.main_net_cents, o.super_large_net_cents, o.large_net_cents, "
-    "o.medium_net_cents, o.small_net_cents, o.price_micro, o.change_pct_bp, o.volume, "
+    "o.medium_net_cents, o.small_net_cents, "
+    "o.super_large_gross_cents, o.large_gross_cents, o.medium_gross_cents, o.small_gross_cents, "
+    "o.price_micro, o.change_pct_bp, o.volume, "
     "o.turnover_cents, o.turnover_pct_bp, o.constituent_count, o.expected_count, o.is_derived"
 )
 
@@ -55,6 +57,10 @@ class ObservationRow:
     large_net_cents: int | None
     medium_net_cents: int | None
     small_net_cents: int | None
+    super_large_gross_cents: int | None
+    large_gross_cents: int | None
+    medium_gross_cents: int | None
+    small_gross_cents: int | None
     price_micro: int | None
     change_pct_bp: int | None
     volume: int | None
@@ -73,6 +79,7 @@ class ObservationDao:
         self, *, subject_id: int, source_code: str, trade_date: str, minute_slot: str,
         value_type: ValueType, granularity: str, observed_at: str,
         net_amount_cents: int | None = None, five_tier: dict[str, int] | None = None,
+        four_gross: dict[str, int] | None = None,
         price_micro: int | None = None, change_pct_bp: int | None = None,
         volume: int | None = None, turnover_cents: int | None = None,
         turnover_pct_bp: int | None = None, inflow_cents: int | None = None,
@@ -80,17 +87,23 @@ class ObservationDao:
         expected_count: int | None = None, source_unit: str, raw_value: str | None = None,
         is_derived: bool = False, ingestion_run_id: int, created_at: str,
     ) -> int:
-        """幂等写一条观测。返回 observation_id。键 (subject,date,value_type,slot)。"""
+        """幂等写一条观测。返回 observation_id。键 (subject,source,date,value_type,slot)。
+
+        four_gross（spec005）：四档成交额 {super_large/large/medium/small_gross_cents}，
+        新浪行全有、无gross源不传（全NULL）。
+        """
         ft = five_tier or {}
+        fg = four_gross or {}
         self._conn.execute(
             """INSERT INTO observation
                (subject_id, source_code, trade_date, minute_slot, value_type, granularity,
                 observed_at, net_amount_cents, main_net_cents, super_large_net_cents,
                 large_net_cents, medium_net_cents, small_net_cents, inflow_cents, outflow_cents,
+                super_large_gross_cents, large_gross_cents, medium_gross_cents, small_gross_cents,
                 price_micro, change_pct_bp, volume, turnover_cents, turnover_pct_bp,
                 constituent_count, expected_count, source_unit, raw_value, is_derived,
                 ingestion_run_id, created_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                ON CONFLICT(subject_id, source_code, trade_date, value_type, minute_slot) DO UPDATE SET
                  net_amount_cents=excluded.net_amount_cents,
                  main_net_cents=excluded.main_net_cents,
@@ -98,6 +111,10 @@ class ObservationDao:
                  large_net_cents=excluded.large_net_cents,
                  medium_net_cents=excluded.medium_net_cents,
                  small_net_cents=excluded.small_net_cents,
+                 super_large_gross_cents=excluded.super_large_gross_cents,
+                 large_gross_cents=excluded.large_gross_cents,
+                 medium_gross_cents=excluded.medium_gross_cents,
+                 small_gross_cents=excluded.small_gross_cents,
                  inflow_cents=excluded.inflow_cents, outflow_cents=excluded.outflow_cents,
                  price_micro=excluded.price_micro, change_pct_bp=excluded.change_pct_bp,
                  volume=excluded.volume, turnover_cents=excluded.turnover_cents,
@@ -110,6 +127,8 @@ class ObservationDao:
              observed_at, net_amount_cents, ft.get("main_net_cents"),
              ft.get("super_large_net_cents"), ft.get("large_net_cents"),
              ft.get("medium_net_cents"), ft.get("small_net_cents"), inflow_cents, outflow_cents,
+             fg.get("super_large_gross_cents"), fg.get("large_gross_cents"),
+             fg.get("medium_gross_cents"), fg.get("small_gross_cents"),
              price_micro, change_pct_bp, volume, turnover_cents, turnover_pct_bp,
              constituent_count, expected_count, source_unit, raw_value, 1 if is_derived else 0,
              ingestion_run_id, created_at),
@@ -269,6 +288,25 @@ class ObservationDao:
         # 去掉尾部 _rn 列，升序返回
         ordered = sorted((ObservationRow(*r[:-1]) for r in rows), key=lambda x: x.trade_date)
         return ordered
+
+    def tiers_rows_daily(
+        self, *, subject_id: int, days: int, sources: list[str],
+    ) -> list["ObservationRow"]:
+        """资金档位日线：逐日取资金流权威源行（含四档 net+gross）。复用 series_daily 源解析。"""
+        return self.series_daily(subject_id=subject_id, days=days, sources=sources,
+                                 nonnull_column="main_net_cents")
+
+    def tiers_rows_intraday(self, *, subject_id: int) -> list["ObservationRow"]:
+        """资金档位盘中：当日分钟净额序列（东财，无 gross），按 minute_slot 升序。"""
+        rows = self._conn.execute(
+            f"""SELECT {_OBS_COLS}
+               FROM observation o JOIN subject s ON s.subject_id = o.subject_id
+               WHERE o.subject_id=? AND o.value_type='intraday_snapshot'
+                 AND o.minute_slot!='LATEST'
+               ORDER BY o.trade_date DESC, o.minute_slot ASC""",
+            (subject_id,),
+        ).fetchall()
+        return [ObservationRow(*r) for r in rows]
 
     def earliest_trade_date(self) -> str | None:
         row = self._conn.execute("SELECT MIN(trade_date) FROM observation").fetchone()

@@ -4,11 +4,14 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>QuantChive · 市场观测</title>
-  <link rel="stylesheet" href="/style.css" />
+  <link rel="stylesheet" href="/style.css?v=8" />
 </head>
 <body>
   <header>
-    <h1>QuantChive 市场观测</h1>
+    <div class="header-top">
+      <h1>QuantChive 市场观测</h1>
+      <div id="theme-switch" class="theme-switch"></div>
+    </div>
     <nav class="tabs">
       <button class="tab active" data-asset="a_share">A股</button>
       <button class="tab" data-asset="fund_etf">基金/ETF</button>
@@ -23,6 +26,8 @@
     <span id="prov" class="prov"></span>
   </footer>
 
-  <script src="/app.js"></script>
+  <script src="/vendor/echarts.min.js"></script>
+  <script src="/charts/main_chart.js?v=8"></script>
+  <script src="/app.js?v=8"></script>
 </body>
 </html>

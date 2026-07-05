@@ -158,3 +158,49 @@ class SubjectSeriesResult(_Base):
     provenance: DataProvenance
     points: list[SeriesPoint]
     gap_count: int                 # 断点数（value=None 的点）
+
+
+class TierValues(_Base):
+    """单档位在某时点的值（净额 + 流入/流出，均元字符串；无 gross 时 inflow/outflow=None）。"""
+
+    net: str                       # 净额（元字符串）
+    inflow: str | None = None      # 流入=(gross+net)/2（无 gross 源为 None）
+    outflow: str | None = None     # 流出=(gross-net)/2
+
+
+class TierPoint(_Base):
+    """多档对齐时序的单点：四档 + 主力/散户 + 价 + 累计。断点 value 为 None。"""
+
+    ts: str                        # trade_date（日线）| minute_slot（盘中）
+    price: str | None = None
+    change_pct: str | None = None
+    super_large: TierValues | None = None
+    large: TierValues | None = None
+    medium: TierValues | None = None
+    small: TierValues | None = None
+    main_net: str | None = None
+    retail_net: str | None = None
+    cum_main_net: str | None = None      # 全程绝对累计（后端算）
+    cum_retail_net: str | None = None
+
+
+class DivergenceSegment(_Base):
+    """背离段：价与主力累计方向相反。kind ∈ accumulation(吸筹)|distribution(派发)。"""
+
+    from_ts: str
+    to_ts: str
+    kind: str
+
+
+class TiersSeriesResult(_Base):
+    """多档对齐时序（spec005 资金档位博弈）。has_gross=false 时只有净额（盘中/无gross源）。"""
+
+    subject_id: int
+    source_symbol: str
+    display_name: str
+    granularity: str               # 'daily' | 'intraday'
+    has_gross: bool                # 是否含流入流出（false=只净额）
+    provenance: DataProvenance
+    points: list[TierPoint]
+    divergence: list[DivergenceSegment]
+    gap_count: int

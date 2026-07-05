@@ -107,6 +107,9 @@ class SinaFlowSource:
                 continue
             r0, r1 = _dec(row.get("r0_net")), _dec(row.get("r1_net"))
             r2, r3 = _dec(row.get("r2_net")), _dec(row.get("r3_net"))
+            # gross（成交额）：r0-r3（无 _net 后缀）——推流入流出用
+            g0, g1 = _dec(row.get("r0")), _dec(row.get("r1"))
+            g2, g3 = _dec(row.get("r2")), _dec(row.get("r3"))
             main = None if (r0 is None or r1 is None) else r0 + r1   # 主力=超大+大单
             out.append(RawObservation(
                 source_symbol=symbol, display_name=symbol, asset_class=AssetClass.A_SHARE,
@@ -114,6 +117,7 @@ class SinaFlowSource:
                 caliber=Caliber.EASTMONEY,       # 口径同东财主力，复用标度
                 main_net=main, super_large_net=r0, large_net=r1,
                 medium_net=r2, small_net=r3,
+                super_large_gross=g0, large_gross=g1, medium_gross=g2, small_gross=g3,
                 price=_dec(row.get("trade")),
                 change_pct=(None if _dec(row.get("changeratio")) is None
                             else _dec(row.get("changeratio")) * 100),  # 比率→百分数

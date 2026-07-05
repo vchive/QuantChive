@@ -782,6 +782,12 @@ def backfill_flow_history(
                     "medium_net_cents": to_cents(o.medium_net, unit) if o.medium_net is not None else 0,
                     "small_net_cents": to_cents(o.small_net, unit) if o.small_net is not None else 0,
                 } if o.main_net is not None else None,
+                four_gross={
+                    "super_large_gross_cents": to_cents(o.super_large_gross, unit),
+                    "large_gross_cents": to_cents(o.large_gross, unit),
+                    "medium_gross_cents": to_cents(o.medium_gross, unit),
+                    "small_gross_cents": to_cents(o.small_gross, unit),
+                } if o.super_large_gross is not None else None,  # 四档gross全有或全无
                 source_unit=unit.value, ingestion_run_id=run_id, created_at=now_iso)
             wrote += 1
         if wrote:

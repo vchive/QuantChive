@@ -139,6 +139,9 @@ CREATE TABLE IF NOT EXISTS observation (
     main_net_cents INTEGER, super_large_net_cents INTEGER, large_net_cents INTEGER,
     medium_net_cents INTEGER, small_net_cents INTEGER,
     inflow_cents INTEGER, outflow_cents INTEGER,
+    -- spec005 四档成交额(gross)：与四档净额配对推流入流出(流入=(gross+net)/2)。个股存、板块派生、无gross源全NULL
+    super_large_gross_cents INTEGER, large_gross_cents INTEGER,
+    medium_gross_cents INTEGER, small_gross_cents INTEGER,
     price_micro INTEGER,
     change_pct_bp INTEGER,
     volume INTEGER,
@@ -155,7 +158,12 @@ CREATE TABLE IF NOT EXISTS observation (
         OR (main_net_cents IS NOT NULL AND super_large_net_cents IS NOT NULL AND large_net_cents IS NOT NULL
             AND medium_net_cents IS NOT NULL AND small_net_cents IS NOT NULL)),
     CHECK (main_net_cents IS NOT NULL OR price_micro IS NOT NULL OR volume IS NOT NULL
-           OR turnover_cents IS NOT NULL OR net_amount_cents IS NOT NULL)
+           OR turnover_cents IS NOT NULL OR net_amount_cents IS NOT NULL),
+    -- spec005 四档 gross 全有或全无（新浪行全有、东财/baostock行全NULL）
+    CHECK ((super_large_gross_cents IS NULL AND large_gross_cents IS NULL
+            AND medium_gross_cents IS NULL AND small_gross_cents IS NULL)
+        OR (super_large_gross_cents IS NOT NULL AND large_gross_cents IS NOT NULL
+            AND medium_gross_cents IS NOT NULL AND small_gross_cents IS NOT NULL))
 );
 CREATE UNIQUE INDEX IF NOT EXISTS uq_observation ON observation (subject_id, source_code, trade_date, value_type, minute_slot);
 CREATE INDEX IF NOT EXISTS idx_obs_ranking ON observation (trade_date, value_type, minute_slot, source_code, subject_id);

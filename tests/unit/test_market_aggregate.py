@@ -16,6 +16,8 @@ def _stock(symbol: str, main: int | None) -> ObservationRow:
         granularity="5min", observed_at="t", net_amount_cents=main,
         main_net_cents=tiers[0], super_large_net_cents=tiers[1], large_net_cents=tiers[2],
         medium_net_cents=tiers[3], small_net_cents=tiers[4],
+        super_large_gross_cents=None, large_gross_cents=None,
+        medium_gross_cents=None, small_gross_cents=None,
         price_micro=None, change_pct_bp=None, volume=None, turnover_cents=None,
         turnover_pct_bp=None,
     )

@@ -81,3 +81,15 @@ def basis_points_to_str(bp: int) -> str:
     """基点 → 百分数精确字符串（如 235 → '2.35'）。"""
     q = (Decimal(bp) / _PCT_TO_BP).quantize(Decimal("0.01"))
     return str(q)
+
+
+# ---- spec005 档位流入/流出派生（整数分，恒精确）----
+
+def tier_inflow(gross_cents: int, net_cents: int) -> int:
+    """某档流入 = (成交额 + 净额) / 2。gross+net = 2×买入必为偶，整除恒精确（宪章III）。"""
+    return (gross_cents + net_cents) // 2
+
+
+def tier_outflow(gross_cents: int, net_cents: int) -> int:
+    """某档流出 = (成交额 − 净额) / 2。gross−net = 2×卖出必为偶，整除恒精确。"""
+    return (gross_cents - net_cents) // 2

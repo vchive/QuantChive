@@ -4,6 +4,7 @@
 
 const $ = (id) => document.getElementById(id);
 const el = (t, cls, html) => { const e = document.createElement(t); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; };
+let CURRENT_REDRAW = null;   // 主题切换时重绘当前图表的回调
 
 let ASSET = "a_share";          // 当前品种 Tab
 const stack = [];               // 下钻栈：[{title, render}]
@@ -181,22 +182,65 @@ async function viewEtf() {
 // ---- 视图：单主体时序（日线历史 / 当日分钟可切换）----
 async function viewSeries(subjectId, name, metric = "main_net", gran = "daily") {
   const v = $("view"); v.innerHTML = "";
-  v.appendChild(el("h2", null, `${name} · ${metric} 时序`));
-  // 粒度切换：daily 历史（回填）/ intraday 当日分钟
+  // 骨架屏（fetch 前）
+  const skel = el("div", "skeleton"); skel.style.height = "520px"; skel.style.margin = "12px 0";
+  v.appendChild(skel);
+  // 粒度切换
   const toggle = el("div", "gran-toggle");
   [["daily", "日线历史"], ["intraday", "当日分钟"]].forEach(([g, label]) => {
     const b = el("button", "gran" + (g === gran ? " active" : ""), label);
     b.onclick = () => viewSeries(subjectId, name, metric, g);
     toggle.appendChild(b);
   });
-  v.appendChild(toggle);
   try {
-    const data = await api(`/api/subjects/${subjectId}/series?metric=${metric}&granularity=${gran}`);
-    v.appendChild(sparkline(data.points));
+    const data = await api(`/api/subjects/${subjectId}/tiers_series?granularity=${gran}`);
+    v.innerHTML = "";
+    // —— 价格头部（长桥/富途风格）——
+    const last = data.points[data.points.length - 1] || {};
+    const header = el("div", "subject-header");
+    const top = el("div", "sh-top");
+    top.appendChild(el("span", "sh-name", name));
+    if (last.price != null) top.appendChild(el("span", "sh-price num", last.price));
+    if (last.change_pct != null) {
+      const cls = signCls(last.change_pct);
+      top.appendChild(el("span", "sh-pill " + cls, fmtPct(last.change_pct)));
+    }
+    header.appendChild(top);
+    // 键值统计条
+    const stats = el("div", "sh-stats");
+    const stat = (k, val, cls) => {
+      const s = el("div", "sh-stat");
+      s.appendChild(el("div", "k", k));
+      s.appendChild(el("div", "v" + (cls ? " " + cls : ""), val));
+      stats.appendChild(s);
+    };
+    if (last.main_net != null) stat("主力净额", fmtYi(last.main_net), signCls(last.main_net));
+    if (last.super_large) stat("超大单净", fmtYi(last.super_large.net), signCls(last.super_large.net));
+    if (last.super_large && last.super_large.inflow != null) {
+      stat("超大流入", fmtYi(last.super_large.inflow), "pos");
+      stat("超大流出", fmtYi(last.super_large.outflow), "neg");
+    }
+    stat("截至", last.ts || "—", "");
+    header.appendChild(stats);
+    v.appendChild(header);
+    v.appendChild(toggle);
+    // —— 主图 ——
+    const chartBox = el("div", "flow-chart");
+    chartBox.style.height = "520px";
+    v.appendChild(chartBox);
+    renderMainChart(chartBox, data);
+    // 主题切换时重绘本图
+    CURRENT_REDRAW = () => { chartBox.innerHTML = ""; renderMainChart(chartBox, data); };
+    const divTxt = (data.divergence || []).map((d) => d.kind === "accumulation" ? "吸筹" : "派发").join("、");
     v.appendChild(el("div", "sub",
-      `粒度 ${data.granularity} · ${data.points.length} 点 · 截至 ${data.trade_date}`));
+      `${data.points.length} 点`
+      + (data.has_gross ? " · 含流入流出" : " · 仅净额（盘中无流入流出）")
+      + (divTxt ? ` · 背离：${divTxt}` : "")));
     setProvenance(data.provenance);
   } catch (e) {
+    v.innerHTML = "";
+    v.appendChild(el("h2", null, `${name} · 资金档位博弈`));
+    v.appendChild(toggle);
     const msg = e.code === "OUT_OF_WINDOW" ? "超出保留窗（数据已清理）"
       : e.code === "NO_DATA_FOR_DATE" ? (e.message || "无数据") : `${e.code}: ${e.message}`;
     v.appendChild(el("div", "hint", msg));
@@ -214,5 +258,54 @@ function selectAsset(asset) {
 
 document.querySelectorAll(".tab").forEach((t) =>
   t.addEventListener("click", () => selectAsset(t.dataset.asset)));
+
+// ---- 主题切换 ----
+// [id, 名称, 预览色块(背景, 主色/强调)]
+const THEMES = [
+  ["light", "浅色", ["#FFFFFF", "#2E6BE6"]],
+  ["blue-dark", "蓝灰深色", ["#1B2030", "#4B8BFF"]],
+  ["black", "纯黑", ["#141416", "#3A7BFF"]],
+  ["warm", "暖白", ["#FDFBF7", "#C9781E"]],
+  ["slate", "石板灰", ["#282D34", "#5CA0F0"]],
+];
+function themeName(id) { const t = THEMES.find((x) => x[0] === id); return t ? t[1] : "浅色"; }
+function applyTheme(name) {
+  if (name === "light") document.documentElement.removeAttribute("data-theme");
+  else document.documentElement.setAttribute("data-theme", name);
+  localStorage.setItem("qc-theme", name);
+  const cur = $("theme-current");
+  if (cur) cur.textContent = themeName(name);
+  document.querySelectorAll(".theme-item").forEach((b) =>
+    b.classList.toggle("active", b.dataset.theme === name));
+  if (typeof CURRENT_REDRAW === "function") CURRENT_REDRAW();
+}
+function mountThemeSwitcher() {
+  const host = $("theme-switch");
+  if (!host) return;
+  const saved = localStorage.getItem("qc-theme") || "light";
+  // 触发按钮：色点 + 当前主题名 + ▾
+  const trigger = el("button", "theme-trigger");
+  trigger.innerHTML =
+    `<span class="theme-dot" id="theme-dot"></span>`
+    + `<span id="theme-current">${themeName(saved)}</span>`
+    + `<span class="theme-caret">▾</span>`;
+  // 下拉菜单
+  const menu = el("div", "theme-menu");
+  THEMES.forEach(([id, label, colors]) => {
+    const item = el("button", "theme-item");
+    item.dataset.theme = id;
+    item.innerHTML =
+      `<span class="swatch" style="background:${colors[0]};border-color:${colors[1]}"></span>`
+      + `<span>${label}</span>`;
+    item.onclick = () => { applyTheme(id); menu.classList.remove("open"); };
+    menu.appendChild(item);
+  });
+  trigger.onclick = (e) => { e.stopPropagation(); menu.classList.toggle("open"); };
+  document.addEventListener("click", () => menu.classList.remove("open"));
+  host.appendChild(trigger);
+  host.appendChild(menu);
+  applyTheme(saved);
+}
+mountThemeSwitcher();
 
 selectAsset("a_share");

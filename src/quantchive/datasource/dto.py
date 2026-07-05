@@ -38,6 +38,11 @@ class RawObservation:
     large_net: Decimal | None = None
     medium_net: Decimal | None = None
     small_net: Decimal | None = None
+    # spec005 四档成交额(gross)：与净额配对推流入流出。无 gross 源为 None
+    super_large_gross: Decimal | None = None
+    large_gross: Decimal | None = None
+    medium_gross: Decimal | None = None
+    small_gross: Decimal | None = None
     # 价格/量指标（原值 Decimal；无则 None）
     price: Decimal | None = None            # 现价（元）
     change_pct: Decimal | None = None       # 涨跌幅（百分数，如 2.35 表示 2.35%）
