@@ -9,7 +9,12 @@ from fastapi import APIRouter, Depends, Query
 
 from quantchive.api.deps import get_conn
 from quantchive.core.settings import get_settings
-from quantchive.service.dto import FlowTopologyResult, FlowTreeResult, TiersSeriesResult
+from quantchive.service.dto import (
+    FlowTopologyResult,
+    FlowTreeResult,
+    SectorTrendsResult,
+    TiersSeriesResult,
+)
 from quantchive.service.flow_query_service import FlowQueryService
 from quantchive.service.flow_topology_service import FlowTopologyService
 
@@ -60,6 +65,18 @@ def get_sector_stocks(
 def get_flow_dates(conn=Depends(get_conn)) -> dict:
     """可选交易日列表（历史日期选择器用），降序。"""
     return {"dates": FlowTopologyService(conn).available_dates(limit=60)}
+
+
+@topology_router.get("/topology/trends", response_model=SectorTrendsResult)
+def get_sector_trends(
+    tier: str = Query("main", pattern="^(main|super_large|large|medium|small)$"),
+    days: int = Query(20, ge=2, le=60),
+    top_sectors: int = Query(10, ge=1, le=20),
+    conn=Depends(get_conn),
+) -> SectorTrendsResult:
+    """各行业近 N 天净额趋势（多天对比折线）。"""
+    return FlowTopologyService(conn).get_sector_trends(
+        tier=tier, days=days, top_sectors=top_sectors)
 
 
 @topology_router.get("/topology/tree", response_model=FlowTreeResult)

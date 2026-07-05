@@ -55,6 +55,50 @@ class FlowTopologyService:
             (self._source, limit)).fetchall()
         return [r[0] for r in rows]
 
+    def get_sector_trends(self, *, tier: str = "main", days: int = 20, top_sectors: int = 10):
+        """各行业近 N 交易日净额趋势（多天对比折线）。整数分求和，只出字符串。
+
+        返回 {dates:[...], series:[{sector, sid, values:[净额元字符串,按 dates 对齐]}]}。
+        取 |最新日净额| Top-N 行业。"""
+        from quantchive.service.dto import SectorTrendsResult, SectorTrendSeries
+        net_col = _TIER_COL.get(tier)
+        if net_col is None:
+            raise NoDataForDate(f"未知档位 {tier}", detail={"tier": tier})
+        dates = list(reversed(self.available_dates(limit=days)))   # 升序
+        if not dates:
+            raise NoDataForDate("无 sina 日线数据", detail={})
+        l1_map = build_l1_map(self._conn)   # 当前成分（缓变）
+        ind_name = {r[0]: r[1] for r in self._conn.execute(
+            "SELECT subject_id, display_name FROM subject WHERE subject_kind='industry'").fetchall()}
+        # 逐日 × 行业 净额累加（整数分）
+        placeholders = ",".join("?" * len(dates))
+        rows = self._conn.execute(
+            f"""SELECT trade_date, subject_id, {net_col} FROM observation
+                WHERE source_code=? AND value_type='daily_final' AND {net_col} IS NOT NULL
+                  AND trade_date IN ({placeholders})""",
+            (self._source, *dates)).fetchall()
+        # {sid: {date: net_cents}}
+        agg: dict[int, dict[str, int]] = {}
+        for td, sub_id, net in rows:
+            sid = l1_map.get(sub_id)
+            if sid is None:
+                continue
+            agg.setdefault(sid, {}).setdefault(td, 0)
+            agg[sid][td] += net
+        # 按最新日 |净额| 取 TopN
+        last = dates[-1]
+        ranked = sorted(agg.items(), key=lambda kv: abs(kv[1].get(last, 0)), reverse=True)[:top_sectors]
+        series = [
+            SectorTrendSeries(
+                sector=ind_name.get(sid, f"行业{sid}"), sid=sid,
+                values=[cents_to_yuan_str(perday.get(d, 0)) for d in dates])
+            for sid, perday in ranked
+        ]
+        prov = DataProvenance(
+            trade_date=last, source_type=SourceType.DAILY_FINAL, source_id=self._source,
+            captured_at="EOD", is_stale=False)
+        return SectorTrendsResult(tier=tier, dates=dates, provenance=prov, series=series)
+
     def get_topology(
         self, *, trade_date: str | None = None, tier: str = "main",
         top_sectors: int = 20, top_stocks_per_sector: int = 10,

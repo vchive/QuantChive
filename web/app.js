@@ -304,7 +304,7 @@ function buildPlaybackBar(points, cur, seek) {
       i += 1;
       if (i >= points.length) { stopTopoPlay(); return; }
       seek(points[i]);   // 逐帧重绘（viewTopology 重建含本 bar，playing 保留继续）
-    }, 1200);
+    }, 3000);
   };
   bar.appendChild(btn); bar.appendChild(slider); bar.appendChild(label);
   return bar;
@@ -318,7 +318,7 @@ async function viewTopology(tier = "main", mode = "sankey", tradeDate = "") {
   v.appendChild(el("h2", null, title));
   // 视图方式切换
   const modeToggle = el("div", "gran-toggle");
-  [["sankey", "桑基水流"], ["sunburst", "旭日钻取"], ["ranking", "强弱排行"], ["treemap", "全景矩形"]].forEach(([m, label]) => {
+  [["sankey", "桑基水流"], ["sunburst", "旭日钻取"], ["ranking", "强弱排行"], ["treemap", "全景矩形"], ["trends", "多天趋势"]].forEach(([m, label]) => {
     const b = el("button", "gran" + (m === mode ? " active" : ""), label);
     b.onclick = () => { logClick("切视图", label); viewTopology(tier, m, tradeDate); };
     modeToggle.appendChild(b);
@@ -341,9 +341,30 @@ async function viewTopology(tier = "main", mode = "sankey", tradeDate = "") {
     dateSel.appendChild(o);
   });
   dateSel.onchange = () => { logClick("选日期", dateSel.value); viewTopology(tier, mode, dateSel.value); };
-  const row = el("div", "toggle-row"); row.appendChild(modeToggle); row.appendChild(tierToggle); row.appendChild(dateSel);
+  const row = el("div", "toggle-row"); row.appendChild(modeToggle); row.appendChild(tierToggle);
+  // 多天趋势不需要日期选择/回放/下钻（它本身就是跨多天）；其余模式才挂日期选择器
+  if (mode !== "trends") row.appendChild(dateSel);
   v.appendChild(row);
   const skel = el("div", "skeleton"); skel.style.height = "580px"; v.appendChild(skel);
+
+  // —— 多天趋势折线（独立分支：跨多天、不选单日、不下钻）——
+  if (mode === "trends") {
+    try {
+      const data = await api(`/api/flow/topology/trends?tier=${tier}&days=20&top_sectors=10`);
+      v.innerHTML = ""; v.appendChild(el("h2", null, title)); v.appendChild(row);
+      const box = el("div", "flow-chart"); box.style.height = "580px"; v.appendChild(box);
+      const draw = () => { box.innerHTML = ""; renderSectorTrends(box, data); };
+      draw(); CURRENT_REDRAW = draw;
+      v.appendChild(el("div", "sub",
+        `近 ${data.dates.length} 交易日 · Top10 行业主力净额趋势 · 点图例只看单行业`));
+      setProvenance(data.provenance);
+    } catch (e) {
+      v.innerHTML = ""; v.appendChild(el("h2", null, title)); v.appendChild(row);
+      v.appendChild(el("div", "hint", `${e.code}: ${e.message}`));
+    }
+    return;
+  }
+
   const dq = tradeDate ? `&trade_date=${tradeDate}` : "";
   // 桑基/排行用 topology(扁平)，旭日/矩形树用 tree(层级)
   const useTree = (mode === "sunburst" || mode === "treemap");

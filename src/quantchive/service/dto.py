@@ -261,3 +261,20 @@ class FlowTreeResult(_Base):
     provenance: DataProvenance
     coverage_pct: str
     root: FlowTreeNode
+
+
+class SectorTrendSeries(_Base):
+    """单行业多天净额趋势（值按 dates 对齐，元字符串带符号）。"""
+
+    sector: str
+    sid: int
+    values: list[str]
+
+
+class SectorTrendsResult(_Base):
+    """各行业近 N 天净额趋势（多天对比折线，spec006）。"""
+
+    tier: str
+    dates: list[str]
+    provenance: DataProvenance
+    series: list[SectorTrendSeries]

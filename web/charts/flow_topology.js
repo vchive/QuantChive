@@ -255,3 +255,42 @@ function renderMarketTreemap(dom, tree, onSectorClick) {
   });
   return chart;
 }
+
+
+/* 多天趋势折线（spec006）：各行业近N天净额趋势对比。data=trends 响应。
+   点图例=只看该行业；红涨绿跌语义靠正负值本身。随主题跟随。 */
+function renderSectorTrends(dom, data) {
+  const chart = initChart(dom);
+  const c = _topoColors();
+  const LABEL = c.LABEL, GRID = cssVar("--chart-grid", "rgba(0,0,0,0.06)");
+  // 每行业一条折线（值=亿）；多色区分（主题强调色系轮转）
+  const palette = ["#E5484D", "#2E6BE6", "#12A150", "#C9781E", "#8B5CF6",
+                   "#EC4899", "#0EA5E9", "#F59E0B", "#14B8A6", "#EF4444"];
+  const series = data.series.map((s, i) => ({
+    name: s.sector, type: "line", smooth: true, showSymbol: false,
+    lineStyle: { width: 2, color: palette[i % palette.length] },
+    emphasis: { focus: "series" },
+    data: s.values.map((v) => parseFloat(v) / 1e8),
+  }));
+  chart.setOption({
+    backgroundColor: "transparent",
+    tooltip: {
+      trigger: "axis", backgroundColor: c.TIP_BG, borderColor: c.TIP_BD, borderWidth: 1,
+      textStyle: { color: c.TIP_TX, fontSize: 12 }, extraCssText: "border-radius:8px;",
+      valueFormatter: (v) => (v >= 0 ? "+" : "") + v.toFixed(2) + "亿",
+    },
+    legend: { type: "scroll", top: 0, textStyle: { color: LABEL, fontSize: 11 },
+      inactiveColor: cssVar("--text-disabled", "#C2C8D2"), data: data.series.map((s) => s.sector) },
+    grid: { left: 56, right: 24, top: 40, bottom: 40 },
+    xAxis: { type: "category", data: data.dates.map((d) => d.slice(5)), boundaryGap: false,
+      axisLabel: { color: LABEL, fontSize: 10 }, axisLine: { lineStyle: { color: cssVar("--chart-axis", "#E3E7ED") } },
+      axisTick: { show: false } },
+    yAxis: { type: "value", name: "净额(亿)", nameTextStyle: { color: LABEL, fontSize: 10 },
+      axisLabel: { color: LABEL, fontSize: 10 }, axisLine: { show: false }, axisTick: { show: false },
+      splitLine: { lineStyle: { color: GRID } } },
+    dataZoom: [{ type: "inside" }, { type: "slider", bottom: 4, height: 14,
+      fillerColor: cssVar("--accent-weak", "rgba(46,107,230,0.1)"), handleStyle: { color: cssVar("--accent", "#2E6BE6") } }],
+    series: series,
+  });
+  return chart;
+}
