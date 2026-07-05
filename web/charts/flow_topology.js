@@ -75,7 +75,7 @@ function renderFlowSankey(dom, data, onSectorClick) {
     const rects = list.filter((el) => el.type === "rect");
     const paths = list.filter((el) => el.type === "path");
     const x = e.offsetX, y = e.offsetY;
-    // ① 先命中节点矩形（rect[i] ↔ nodes[i]）
+    // ① 命中节点矩形（rect[i] ↔ nodes[i]）
     for (let i = 0; i < rects.length; i++) {
       if (rects[i].contain(x, y)) {
         const n = nodes[i];
@@ -83,16 +83,30 @@ function renderFlowSankey(dom, data, onSectorClick) {
         return;
       }
     }
-    // ② 再命中流向色带（path[j] ↔ sectorLinks[j]），下钻到色带的目标行业
+    // ② 命中流向色带 path（path[j] ↔ sectorLinks[j]）→ 目标行业
     for (let j = 0; j < paths.length && j < sectorLinks.length; j++) {
       if (paths[j].contain(x, y)) {
-        const sid = parseInt(sectorLinks[j].target.split(":")[1], 10);
-        const node = nodes.find((n) => n._sid === sid);
-        if (node) fire(node._sid, node._label);
-        return;
+        return fireByTarget(sectorLinks[j].target);
       }
     }
+    // ③ 兜底：色带是细曲线，点附近常错过。取纵向中心最接近点击 Y 的行业节点就近下钻。
+    let best = null, bestDist = Infinity;
+    for (let i = 0; i < rects.length; i++) {
+      const n = nodes[i];
+      if (!n || n._sid == null) continue;   // 跳过大盘
+      const br = rects[i].getBoundingRect().clone();
+      br.applyTransform(rects[i].transform);
+      const cy = br.y + br.height / 2;
+      const d = Math.abs(y - cy);
+      if (d < bestDist) { bestDist = d; best = n; }
+    }
+    if (best) fire(best._sid, best._label);
   });
+  function fireByTarget(target) {
+    const sid = parseInt(target.split(":")[1], 10);
+    const node = chart.getOption().series[0].data.find((n) => n._sid === sid);
+    if (node) fire(node._sid, node._label);
+  }
   return chart;
 }
 
