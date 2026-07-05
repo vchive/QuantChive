@@ -4,7 +4,7 @@
    随 CSS 变量跟随主题。金额只画不算。 */
 
 function renderBattleQuadrant(dom, data) {
-  const chart = echarts.init(dom, null, { renderer: "canvas" });
+  const chart = initChart(dom);
   const ts = data.points.map((p) => p.ts);
   const POS = cssVar("--pos", "#E5484D"), NEG = cssVar("--neg", "#12A150");
   const AXIS_C = cssVar("--chart-axis", "#E3E7ED"), LABEL = cssVar("--chart-label", "#8A94A6");
@@ -69,6 +69,5 @@ function renderBattleQuadrant(dom, data) {
           data: [{ xAxis: 0 }, { yAxis: 0 }] } },
     ],
   });
-  window.addEventListener("resize", () => chart.resize());
   return chart;
 }

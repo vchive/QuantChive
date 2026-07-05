@@ -16,7 +16,7 @@ function _yi(yuan) { const n = parseFloat(yuan); return (n / 1e8).toFixed(2); } 
 
 /* 桑基主图。data=topology 响应；onSectorClick(sectorId) 点行业下钻 */
 function renderFlowSankey(dom, data, onSectorClick) {
-  const chart = echarts.init(dom, null, { renderer: "canvas" });
+  const chart = initChart(dom);
   const c = _topoColors();
   const nodes = data.nodes.map((n) => ({
     name: n.id, _label: n.name, depth: n.depth, _sid: n.subject_id,
@@ -48,30 +48,32 @@ function renderFlowSankey(dom, data, onSectorClick) {
     series: [{
       type: "sankey", orient: "horizontal", nodeAlign: "left",
       left: 12, right: 120, top: 20, bottom: 20,
-      nodeGap: 10, nodeWidth: 14, layoutIterations: 32,
+      nodeGap: 10, nodeWidth: 22, layoutIterations: 32,
       emphasis: { focus: "adjacency" },
       lineStyle: { curveness: 0.5 },
       data: nodes, links: links,
     }],
   });
-  // 点击行业节点 → 下钻（按 id 回查原始节点，不依赖 ECharts 是否保留自定义字段）
+  // 点击行业节点 → 下钻。优先用节点自带 _sid（同 ranking 的可靠模式），
+  // 回退按 id 查原始节点。sankey 节点 click 的 pm.data 保留我们设的字段。
   const byId = {};
   data.nodes.forEach((n) => { byId[n.id] = n; });
   chart.on("click", (pm) => {
-    // sankey 节点 click：pm.name 是节点 id；边 click 有 source/target
-    const id = pm.name || (pm.data && pm.data.name);
-    const orig = byId[id];
-    if (orig && orig.depth === 1 && orig.subject_id != null && onSectorClick) {
-      onSectorClick(orig.subject_id, orig.name);
+    const d = pm.data || {};
+    let sid = d._sid;
+    let name = d._label;
+    if (sid == null) {                       // 回退：按 id 回查
+      const orig = byId[d.name || pm.name];
+      if (orig) { sid = orig.subject_id; name = orig.name; }
     }
+    if (sid != null && onSectorClick) onSectorClick(sid, name);
   });
-  window.addEventListener("resize", () => chart.resize());
   return chart;
 }
 
 /* Treemap：行业内个股。面积=gross、色=净额方向 */
 function renderFlowTreemap(dom, data) {
-  const chart = echarts.init(dom, null, { renderer: "canvas" });
+  const chart = initChart(dom);
   const c = _topoColors();
   const stocks = data.nodes.filter((n) => n.depth === 2);
   const children = stocks.map((n) => {
@@ -101,14 +103,13 @@ function renderFlowTreemap(dom, data) {
       name: sec ? sec.name : "行业",
     }],
   });
-  window.addEventListener("resize", () => chart.resize());
   return chart;
 }
 
 
 /* 旭日图（Sunburst）：大盘→行业→个股 圈层，点击逐层钻取。data=tree 响应 */
 function renderFlowSunburst(dom, tree, onStockClick) {
-  const chart = echarts.init(dom, null, { renderer: "canvas" });
+  const chart = initChart(dom);
   const c = _topoColors();
   const conv = (n) => ({
     name: n.name, value: Math.abs(parseFloat(n.gross_yuan || n.net_yuan)) || 1,
@@ -142,13 +143,12 @@ function renderFlowSunburst(dom, tree, onStockClick) {
       onStockClick(pm.data._sid, pm.name);
     }
   });
-  window.addEventListener("resize", () => chart.resize());
   return chart;
 }
 
 /* 行业强弱排行（双向条）：各行业净额横向，红涨绿跌一屏排座次。data=topology 响应 */
 function renderSectorRanking(dom, data, onSectorClick) {
-  const chart = echarts.init(dom, null, { renderer: "canvas" });
+  const chart = initChart(dom);
   const c = _topoColors();
   const secs = data.nodes.filter((n) => n.depth === 1 && n.subject_id != null)
     .map((n) => ({ name: n.name, sid: n.subject_id, net: parseFloat(n.net_yuan) / 1e8, dir: n.direction }))
@@ -179,13 +179,12 @@ function renderSectorRanking(dom, data, onSectorClick) {
   chart.on("click", (pm) => {
     if (pm.data && pm.data._sid != null && onSectorClick) onSectorClick(pm.data._sid, pm.name);
   });
-  window.addEventListener("resize", () => chart.resize());
   return chart;
 }
 
 /* 全市场矩形树（Treemap 全景）：所有行业一张图，面积=成交额、色=净额方向。data=tree 响应 */
 function renderMarketTreemap(dom, tree, onSectorClick) {
-  const chart = echarts.init(dom, null, { renderer: "canvas" });
+  const chart = initChart(dom);
   const c = _topoColors();
   const data = (tree.root.children || []).map((n) => ({
     name: n.name, value: Math.abs(parseFloat(n.gross_yuan || n.net_yuan)) || 1,
@@ -212,6 +211,5 @@ function renderMarketTreemap(dom, tree, onSectorClick) {
   chart.on("click", (pm) => {
     if (pm.data && pm.data._sid != null && onSectorClick) onSectorClick(pm.data._sid, pm.name);
   });
-  window.addEventListener("resize", () => chart.resize());
   return chart;
 }

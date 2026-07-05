@@ -3,7 +3,7 @@
    随 CSS 变量跟随主题。金额只画不算。 */
 
 function renderReplay(dom, data) {
-  const chart = echarts.init(dom, null, { renderer: "canvas" });
+  const chart = initChart(dom);
   const ts = data.points.map((p) => p.ts);
   const keys = ["super_large", "large", "medium", "small"];
   const names = ["超大", "大", "中", "小"];
@@ -68,6 +68,5 @@ function renderReplay(dom, data) {
     },
     options: frames,
   });
-  window.addEventListener("resize", () => chart.resize());
   return chart;
 }

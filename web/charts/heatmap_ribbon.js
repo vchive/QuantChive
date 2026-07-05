@@ -3,7 +3,7 @@
    一屏看全四档时间演化。随 CSS 变量跟随主题。金额只画不算。 */
 
 function renderHeatmapRibbon(dom, data) {
-  const chart = echarts.init(dom, null, { renderer: "canvas" });
+  const chart = initChart(dom);
   const ts = data.points.map((p) => p.ts);
   const rows = ["超大", "大", "中", "小"];
   const keys = ["super_large", "large", "medium", "small"];
@@ -71,6 +71,5 @@ function renderHeatmapRibbon(dom, data) {
         itemStyle: { borderColor: "transparent", borderWidth: 0 }, progressive: 0 },
     ],
   });
-  window.addEventListener("resize", () => chart.resize());
   return chart;
 }

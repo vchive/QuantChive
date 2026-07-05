@@ -9,6 +9,20 @@ function cssVar(name, fallback) {
   return v || fallback;
 }
 
+// 统一初始化：先销毁该 DOM 上的旧实例（防重复 init 泄漏），用 ResizeObserver
+// 随 DOM 生命周期自适应（不再全局累加 resize 监听器 → 修多次切换卡死）。
+function initChart(dom) {
+  const prev = echarts.getInstanceByDom(dom);
+  if (prev) prev.dispose();
+  const chart = echarts.init(dom, null, { renderer: "canvas" });
+  try {
+    const ro = new ResizeObserver(() => chart.resize());
+    ro.observe(dom);
+    chart.__ro = ro;
+  } catch (_) { /* 老浏览器无 ResizeObserver 时忽略 */ }
+  return chart;
+}
+
 // 流入侧(net>0)：红→橙渐浅；流出侧(net<0)：深绿→浅绿。明度=档位
 const TIER_IN  = { super_large: "#D93A3A", large: "#E8613C", medium: "#F08A4B", small: "#F5B26B" };
 const TIER_OUT = { super_large: "#12A150", large: "#2BBF6B", medium: "#52CC85", small: "#8AD9AB" };
@@ -16,7 +30,7 @@ const TIER_OUT = { super_large: "#12A150", large: "#2BBF6B", medium: "#52CC85", 
 function num(s) { return s == null ? null : parseFloat(s); }
 
 function renderMainChart(dom, data) {
-  const chart = echarts.init(dom, null, { renderer: "canvas" });
+  const chart = initChart(dom);
   const ts = data.points.map((p) => p.ts);
   // 主题色（随 CSS 变量跟随主题切换）
   const POS = cssVar("--pos", "#E5484D"), NEG = cssVar("--neg", "#12A150");
@@ -110,6 +124,5 @@ function renderMainChart(dom, data) {
         lineStyle: { color: NEG, width: 1.5 }, areaStyle: { color: areaGrad("44,201,140") }, data: cumRetail },
     ],
   });
-  window.addEventListener("resize", () => chart.resize());
   return chart;
 }

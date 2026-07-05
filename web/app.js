@@ -291,8 +291,8 @@ async function viewTopology(tier = "main", mode = "sankey") {
   const url = useTree
     ? `/api/flow/topology/tree?tier=${tier}&top_sectors=30`
     : `/api/flow/topology?tier=${tier}&top_sectors=20`;
-  const onSector = (sid, sn) => viewSectorTreemap(sid, sn, tier);
-  const onStock = (sid, sn) => viewSeries(sid, sn, "main_net", "daily", "main");
+  const onSector = (sid, sn) => push(sn + " 成分", () => viewSectorTreemap(sid, sn, tier));
+  const onStock = (sid, sn) => push(sn, () => viewSeries(sid, sn, "main_net", "daily", "main"));
   try {
     const data = await api(url);
     v.innerHTML = ""; v.appendChild(el("h2", null, title)); v.appendChild(row);
@@ -321,7 +321,8 @@ async function viewTopology(tier = "main", mode = "sankey") {
 }
 
 async function viewSectorTreemap(sectorId, sectorName, tier) {
-  push(sectorName + " 成分", () => viewSectorTreemap(sectorId, sectorName, tier));
+  // 注意：本函数只渲染，不自调 push（push 会回调本函数 → 无限递归冻结）。
+  // 入栈由调用方 onSector 负责（见 viewTopology）。
   const v = $("view"); v.innerHTML = "";
   v.appendChild(el("h2", null, `${sectorName} · 成分股资金分布`));
   v.appendChild(el("div", "sub", "面积=成交额 · 颜色：红净流入/绿净流出 · 点股看博弈"));
