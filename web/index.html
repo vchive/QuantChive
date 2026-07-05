@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>QuantChive · 市场观测</title>
+  <link rel="stylesheet" href="/style.css?v=27" />
+</head>
+<body>
+  <header>
+    <div class="header-top">
+      <h1>QuantChive 市场观测</h1>
+      <div id="theme-switch" class="theme-switch"></div>
+    </div>
+    <nav class="tabs">
+      <button class="tab active" data-asset="a_share">A股</button>
+      <button class="tab" data-asset="fund_etf">基金/ETF</button>
+      <button class="tab" data-asset="topology">资金流向</button>
+    </nav>
+    <div id="crumbs" class="crumbs"></div>
+    <div id="meta" class="meta"></div>
+  </header>
+
+  <main id="view"><!-- 视图按下钻层级动态渲染 --></main>
+
+  <footer>
+    <span id="prov" class="prov"></span>
+    <details class="clicklog-box">
+      <summary>交互日志</summary>
+      <div id="clicklog" class="clicklog"></div>
+    </details>
+  </footer>
+
+  <script src="/vendor/echarts.min.js"></script>
+  <script src="/charts/main_chart.js?v=27"></script>
+  <script src="/charts/heatmap_ribbon.js?v=27"></script>
+  <script src="/charts/replay.js?v=27"></script>
+  <script src="/charts/battle_quadrant.js?v=27"></script>
+  <script src="/charts/flow_topology.js?v=27"></script>
+  <script src="/app.js?v=27"></script>
+</body>
+</html>
