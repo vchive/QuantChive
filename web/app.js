@@ -327,10 +327,11 @@ async function viewSectorTreemap(sectorId, sectorName, tier) {
   v.appendChild(el("h2", null, `${sectorName} · 成分股资金分布`));
   v.appendChild(el("div", "sub", "面积=成交额 · 颜色：红净流入/绿净流出 · 点股看博弈"));
   const box = el("div", "flow-chart"); box.style.height = "520px"; v.appendChild(box);
+  const onStock = (sid, sn) => push(sn, () => viewSeries(sid, sn, "main_net", "daily", "main"));
   try {
     const data = await api(`/api/flow/topology/sector/${sectorId}?tier=${tier}&top_stocks=30`);
-    renderFlowTreemap(box, data);
-    CURRENT_REDRAW = () => { box.innerHTML = ""; renderFlowTreemap(box, data); };
+    renderFlowTreemap(box, data, onStock);
+    CURRENT_REDRAW = () => { box.innerHTML = ""; renderFlowTreemap(box, data, onStock); };
   } catch (e) {
     box.appendChild(el("div", "hint", `${e.code}: ${e.message}`));
   }

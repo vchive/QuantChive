@@ -65,40 +65,35 @@ function renderFlowSankey(dom, data, onSectorClick) {
     const orig = byId[d.name || pm.name];
     if (orig) fire(orig.subject_id, orig.name);
   });
-  // zrender 兜底：ECharts sankey 节点常不触发 chart.on('click')（节点图元 dataIndex 为
-  // null）。故在 zrender 层按像素命中 node 矩形。矩形按 series.data 顺序渲染，用序号对齐节点。
+  // zrender 兜底：ECharts sankey 节点不触发 chart.on('click')（图元 dataIndex 为 null）。
+  // 在 zrender 层按点击像素命中 node 矩形。rect 按 series.data 顺序渲染 → 序号对齐节点。
+  // 用 getBoundingRect().applyTransform 取图元世界坐标（transform[4] 不含 shape 偏移）。
   chart.getZr().on("click", (e) => {
     const nodes = chart.getOption().series[0].data;
-    const list = chart.getZr().storage.getDisplayList();
+    const rects = chart.getZr().storage.getDisplayList().filter((el) => el.type === "rect");
     const px = e.offsetX, py = e.offsetY;
-    let idx = 0;   // 第 idx 个 rect ↔ nodes[idx]
-    for (const el of list) {
-      if (el.type !== "rect") continue;
-      const r = el.getBoundingRect();
-      const t = el.transform || [1, 0, 0, 1, 0, 0];
-      // 图元本地 rect → 全局包围盒（sankey rect 无旋转，只缩放+平移）
-      const gx = t[0] * r.x + t[4], gy = t[3] * r.y + t[5];
-      const gw = r.width * t[0], gh = r.height * t[3];
-      if (px >= gx && px <= gx + gw && py >= gy && py <= gy + gh) {
-        const n = nodes[idx];
+    for (let i = 0; i < rects.length; i++) {
+      const br = rects[i].getBoundingRect().clone();
+      br.applyTransform(rects[i].transform);
+      if (px >= br.x && px <= br.x + br.width && py >= br.y && py <= br.y + br.height) {
+        const n = nodes[i];
         if (n && n._sid != null) fire(n._sid, n._label);
         return;
       }
-      idx++;
     }
   });
   return chart;
 }
 
-/* Treemap：行业内个股。面积=gross、色=净额方向 */
-function renderFlowTreemap(dom, data) {
+/* Treemap：行业内个股。面积=gross、色=净额方向。点个股 → onStockClick 跳博弈图 */
+function renderFlowTreemap(dom, data, onStockClick) {
   const chart = initChart(dom);
   const c = _topoColors();
   const stocks = data.nodes.filter((n) => n.depth === 2);
   const children = stocks.map((n) => {
     const net = parseFloat(n.net_yuan);
     const gross = n.gross_yuan != null ? Math.abs(parseFloat(n.gross_yuan)) : Math.abs(net);
-    return { name: n.name, value: gross || 1, _net: n.net_yuan, _dir: n.direction,
+    return { name: n.name, value: gross || 1, _net: n.net_yuan, _dir: n.direction, _sid: n.subject_id,
       itemStyle: { color: _dirColor(n.direction, c) } };
   });
   const sec = data.nodes.find((n) => n.depth === 1);
@@ -121,6 +116,9 @@ function renderFlowTreemap(dom, data) {
       data: children,
       name: sec ? sec.name : "行业",
     }],
+  });
+  chart.on("click", (pm) => {
+    if (pm.data && pm.data._sid != null && onStockClick) onStockClick(pm.data._sid, pm.name);
   });
   return chart;
 }
