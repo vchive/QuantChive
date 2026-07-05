@@ -27,7 +27,10 @@ def build_l1_map(conn: sqlite3.Connection, *, as_of: str | None = None) -> dict[
                FROM subject_membership m JOIN subject s ON s.subject_id = m.parent_subject_id
                WHERE s.subject_kind = 'industry' GROUP BY m.parent_subject_id""").fetchall()
     }
-    # 每股所属行业（as_of 过滤有效期）
+    # 每股所属行业。as_of 过滤有效期（无前视）；但板块成分是缓变的、且当前 membership
+    # 多为单日采集（effective_from 同一天），对更早的历史日按 as_of 过滤会得空集——
+    # 此时回退到「当前全部有效 membership」（成分构成缓变，用最新对近月历史是正确近似）。
+    rows = []
     if as_of is not None:
         rows = conn.execute(
             """SELECT m.child_subject_id, m.parent_subject_id
@@ -36,7 +39,7 @@ def build_l1_map(conn: sqlite3.Connection, *, as_of: str | None = None) -> dict[
                  AND m.effective_from <= ?
                  AND (m.effective_to IS NULL OR m.effective_to > ?)""",
             (as_of, as_of)).fetchall()
-    else:
+    if not rows:   # as_of=None 或 as_of 过滤为空 → 用当前全部
         rows = conn.execute(
             """SELECT m.child_subject_id, m.parent_subject_id
                FROM subject_membership m JOIN subject s ON s.subject_id = m.parent_subject_id

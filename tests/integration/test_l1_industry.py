@@ -47,9 +47,9 @@ def test_l1_conservation_partition(conn) -> None:
     assert distinct_l1 <= ind_ids
 
 
-def test_l1_asof_no_lookahead(conn) -> None:
-    """as_of 过滤：给一个很早的日期，映射不含之后才生效的 membership（无前视）。"""
+def test_l1_asof_fallback_when_empty(conn) -> None:
+    """as_of 早于所有 membership 生效日 → 回退到当前全部（成分缓变，不留空集）。"""
     early = build_l1_map(conn, as_of="2000-01-01")
     full = build_l1_map(conn)
-    # 早期日期覆盖 ≤ 全量（不会凭空多出未来关系）
-    assert len(early) <= len(full)
+    # 回退保证非空、且等于全量（membership 多为单日采集）
+    assert len(early) == len(full) and len(early) > 0

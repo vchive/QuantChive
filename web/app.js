@@ -6,6 +6,18 @@ const $ = (id) => document.getElementById(id);
 const el = (t, cls, html) => { const e = document.createElement(t); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; };
 let CURRENT_REDRAW = null;   // 主题切换时重绘当前图表的回调
 
+// ---- 交互日志（确认点击行为）----
+const CLICK_LOG = [];
+function logClick(action, detail) {
+  const ts = new Date().toLocaleTimeString("zh-CN", { hour12: false });
+  CLICK_LOG.unshift(`${ts} · ${action}${detail ? " · " + detail : ""}`);
+  if (CLICK_LOG.length > 50) CLICK_LOG.pop();
+  const panel = $("clicklog");
+  if (panel) panel.innerHTML = CLICK_LOG.map((l) => `<div class="cl-row">${l}</div>`).join("");
+  if (window.console) console.log("[click]", action, detail || "");
+}
+
+
 let ASSET = "a_share";          // 当前品种 Tab
 const stack = [];               // 下钻栈：[{title, render}]
 
@@ -264,8 +276,9 @@ async function viewSeries(subjectId, name, metric = "main_net", gran = "daily", 
   }
 }
 
-// ---- 资金流向拓扑（spec006）：4 种视图 + 下钻 ----
-async function viewTopology(tier = "main", mode = "sankey") {
+// ---- 资金流向拓扑（spec006）：4 种视图 + 历史选日 + 下钻 ----
+let TOPO_DATES = null;   // 缓存可选日期
+async function viewTopology(tier = "main", mode = "sankey", tradeDate = "") {
   const v = $("view"); v.innerHTML = "";
   const title = "资金流向 · 大盘 → 行业 → 个股";
   v.appendChild(el("h2", null, title));
@@ -273,26 +286,38 @@ async function viewTopology(tier = "main", mode = "sankey") {
   const modeToggle = el("div", "gran-toggle");
   [["sankey", "桑基水流"], ["sunburst", "旭日钻取"], ["ranking", "强弱排行"], ["treemap", "全景矩形"]].forEach(([m, label]) => {
     const b = el("button", "gran" + (m === mode ? " active" : ""), label);
-    b.onclick = () => viewTopology(tier, m);
+    b.onclick = () => { logClick("切视图", label); viewTopology(tier, m, tradeDate); };
     modeToggle.appendChild(b);
   });
   // 档位切换
   const tierToggle = el("div", "gran-toggle");
   [["main", "主力"], ["super_large", "超大单"], ["large", "大单"], ["medium", "中单"], ["small", "小单"]].forEach(([t, label]) => {
     const b = el("button", "gran" + (t === tier ? " active" : ""), label);
-    b.onclick = () => viewTopology(t, mode);
+    b.onclick = () => { logClick("切档位", label); viewTopology(t, mode, tradeDate); };
     tierToggle.appendChild(b);
   });
-  const row = el("div", "toggle-row"); row.appendChild(modeToggle); row.appendChild(tierToggle);
+  // 历史日期选择器
+  const dateSel = el("select", "date-sel");
+  if (!TOPO_DATES) {
+    try { TOPO_DATES = (await api("/api/flow/topology/dates")).dates; } catch (_) { TOPO_DATES = []; }
+  }
+  (TOPO_DATES || []).forEach((d, i) => {
+    const o = el("option", null, i === 0 ? `${d}（最新）` : d);
+    o.value = d; if (d === tradeDate) o.selected = true;
+    dateSel.appendChild(o);
+  });
+  dateSel.onchange = () => { logClick("选日期", dateSel.value); viewTopology(tier, mode, dateSel.value); };
+  const row = el("div", "toggle-row"); row.appendChild(modeToggle); row.appendChild(tierToggle); row.appendChild(dateSel);
   v.appendChild(row);
   const skel = el("div", "skeleton"); skel.style.height = "580px"; v.appendChild(skel);
+  const dq = tradeDate ? `&trade_date=${tradeDate}` : "";
   // 桑基/排行用 topology(扁平)，旭日/矩形树用 tree(层级)
   const useTree = (mode === "sunburst" || mode === "treemap");
   const url = useTree
-    ? `/api/flow/topology/tree?tier=${tier}&top_sectors=30`
-    : `/api/flow/topology?tier=${tier}&top_sectors=20`;
-  const onSector = (sid, sn) => push(sn + " 成分", () => viewSectorTreemap(sid, sn, tier));
-  const onStock = (sid, sn) => push(sn, () => viewSeries(sid, sn, "main_net", "daily", "main"));
+    ? `/api/flow/topology/tree?tier=${tier}&top_sectors=30${dq}`
+    : `/api/flow/topology?tier=${tier}&top_sectors=20${dq}`;
+  const onSector = (sid, sn) => { logClick("下钻行业", sn); push(sn + " 成分", () => viewSectorTreemap(sid, sn, tier, tradeDate)); };
+  const onStock = (sid, sn) => { logClick("下钻个股", sn); push(sn, () => viewSeries(sid, sn, "main_net", "daily", "main")); };
   try {
     const data = await api(url);
     v.innerHTML = ""; v.appendChild(el("h2", null, title)); v.appendChild(row);
@@ -320,16 +345,17 @@ async function viewTopology(tier = "main", mode = "sankey") {
   }
 }
 
-async function viewSectorTreemap(sectorId, sectorName, tier) {
+async function viewSectorTreemap(sectorId, sectorName, tier, tradeDate = "") {
   // 注意：本函数只渲染，不自调 push（push 会回调本函数 → 无限递归冻结）。
   // 入栈由调用方 onSector 负责（见 viewTopology）。
   const v = $("view"); v.innerHTML = "";
   v.appendChild(el("h2", null, `${sectorName} · 成分股资金分布`));
   v.appendChild(el("div", "sub", "面积=成交额 · 颜色：红净流入/绿净流出 · 点股看博弈"));
   const box = el("div", "flow-chart"); box.style.height = "520px"; v.appendChild(box);
-  const onStock = (sid, sn) => push(sn, () => viewSeries(sid, sn, "main_net", "daily", "main"));
+  const onStock = (sid, sn) => { logClick("下钻个股", sn); push(sn, () => viewSeries(sid, sn, "main_net", "daily", "main")); };
+  const dq = tradeDate ? `&trade_date=${tradeDate}` : "";
   try {
-    const data = await api(`/api/flow/topology/sector/${sectorId}?tier=${tier}&top_stocks=30`);
+    const data = await api(`/api/flow/topology/sector/${sectorId}?tier=${tier}&top_stocks=30${dq}`);
     renderFlowTreemap(box, data, onStock);
     CURRENT_REDRAW = () => { box.innerHTML = ""; renderFlowTreemap(box, data, onStock); };
   } catch (e) {

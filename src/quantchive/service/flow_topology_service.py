@@ -46,6 +46,15 @@ class FlowTopologyService:
         self._subject = SubjectDao(conn)
         self._source = source_code
 
+    def available_dates(self, *, limit: int = 60) -> list[str]:
+        """可选交易日（有 sina 日线四档的日期，降序）。供历史日期选择器。"""
+        rows = self._conn.execute(
+            """SELECT DISTINCT trade_date FROM observation
+               WHERE source_code=? AND value_type='daily_final' AND main_net_cents IS NOT NULL
+               ORDER BY trade_date DESC LIMIT ?""",
+            (self._source, limit)).fetchall()
+        return [r[0] for r in rows]
+
     def get_topology(
         self, *, trade_date: str | None = None, tier: str = "main",
         top_sectors: int = 20, top_stocks_per_sector: int = 10,

@@ -242,3 +242,23 @@ td.link:hover { color: var(--accent-hover); text-decoration: underline; }
 @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
 
 @media (max-width: 860px) { .boards { grid-template-columns: 1fr; } .sh-name { font-size: 24px; } }
+
+/* 历史日期选择器 */
+.date-sel {
+  background: var(--panel); color: var(--text); border: 1px solid var(--border);
+  border-radius: var(--r-sm); padding: 4px 10px; font-size: var(--fs-label); cursor: pointer;
+  font-family: var(--font-num);
+}
+.date-sel:hover { border-color: var(--accent); }
+
+/* 交互日志面板 */
+.clicklog-box { margin-left: auto; font-size: var(--fs-cap); }
+.clicklog-box summary { color: var(--muted); cursor: pointer; user-select: none; }
+.clicklog {
+  margin-top: 6px; max-height: 160px; overflow-y: auto;
+  background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-sm);
+  padding: 6px 10px; min-width: 260px;
+}
+.cl-row { color: var(--muted); font-family: var(--font-num); line-height: 1.7; border-bottom: 1px solid var(--border-weak); }
+.cl-row:first-child { color: var(--text); }
+footer { display: flex; align-items: flex-start; gap: var(--sp-4); }

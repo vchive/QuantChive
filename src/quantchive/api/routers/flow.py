@@ -56,6 +56,12 @@ def get_sector_stocks(
         sector_id=sector_id, trade_date=trade_date, tier=tier, top_stocks=top_stocks)
 
 
+@topology_router.get("/topology/dates")
+def get_flow_dates(conn=Depends(get_conn)) -> dict:
+    """可选交易日列表（历史日期选择器用），降序。"""
+    return {"dates": FlowTopologyService(conn).available_dates(limit=60)}
+
+
 @topology_router.get("/topology/tree", response_model=FlowTreeResult)
 def get_flow_tree(
     trade_date: str | None = Query(None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
