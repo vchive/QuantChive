@@ -55,6 +55,22 @@ class FlowTopologyService:
             (self._source, limit)).fetchall()
         return [r[0] for r in rows]
 
+    def intraday_points(self, *, trade_date: str) -> dict:
+        """某日「天内时点」列表（供天内回放）：盘中分钟/小时快照的 minute_slot 升序。
+
+        近期分钟级、久远小时级由归档层决定（现盘中数据未攒够，多为空或 EOD 单点）。
+        返回 {trade_date, granularity, slots:[...]}。slots 为该日可播的时点（升序）。
+        """
+        rows = self._conn.execute(
+            """SELECT DISTINCT minute_slot, granularity FROM observation
+               WHERE value_type='intraday_snapshot' AND trade_date=?
+                 AND minute_slot NOT IN ('LATEST') AND main_net_cents IS NOT NULL
+               ORDER BY minute_slot ASC""",
+            (trade_date,)).fetchall()
+        slots = [r[0] for r in rows]
+        gran = rows[0][1] if rows else "eod"
+        return {"trade_date": trade_date, "granularity": gran, "slots": slots}
+
     def get_sector_trends(self, *, tier: str = "main", days: int = 20, top_sectors: int = 10):
         """各行业近 N 交易日净额趋势（多天对比折线）。整数分求和，只出字符串。
 

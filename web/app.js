@@ -276,38 +276,94 @@ async function viewSeries(subjectId, name, metric = "main_net", gran = "daily", 
   }
 }
 
-// ---- 时间轴回放框架（数据源无关：现为按日，下周一换当日每小时，UI/逻辑复用）----
-// TOPO_PLAY.playing 跨重绘保留；seek/播放都调 viewTopology(tier,mode,point)。
+// ---- 天内时点回放框架（播放选中日当日的资金变化：近期分钟级、久远小时级）----
+// 现盘中分钟数据未攒够（下周一盘中调度器跑满一天后到位）。届时 slots 就是当日时点，
+// seek 按 slot 取当日某时刻拓扑；框架/UI/播放逻辑不变，只接数据。
 const TOPO_PLAY = { timer: null, playing: false };
 function stopTopoPlay() {
   if (TOPO_PLAY.timer) { clearInterval(TOPO_PLAY.timer); TOPO_PLAY.timer = null; }
   TOPO_PLAY.playing = false;
 }
-// points：时间点数组(升序)；cur：当前值；seek(point)：跳到该点重绘
-function buildPlaybackBar(points, cur, seek) {
+async function fetchIntradayPoints(tradeDate) {
+  if (!tradeDate) return { slots: [], granularity: "eod" };
+  try { return await api(`/api/flow/topology/intraday_points?trade_date=${tradeDate}`); }
+  catch (_) { return { slots: [], granularity: "eod" }; }
+}
+function buildDayPlaybackBar(dayPoints, tier, mode, tradeDate) {
+  const slots = dayPoints.slots || [];
   const bar = el("div", "playbar");
+  if (slots.length < 2) {
+    // 当日无逐时点数据（现只 EOD）——占位提示，不空跑
+    bar.classList.add("playbar-disabled");
+    bar.appendChild(el("span", "play-hint",
+      `⏱ 天内时点回放：${tradeDate || "该日"} 暂无盘中逐时点数据（分钟/小时级），仅收盘快照。盘中运行满一天后可播当日资金流动。`));
+    return bar;
+  }
   const btn = el("button", "play-btn", TOPO_PLAY.playing ? "⏸" : "▶");
   const slider = el("input", "play-slider");
-  slider.type = "range"; slider.min = 0; slider.max = Math.max(0, points.length - 1);
-  const curIdx = Math.max(0, points.indexOf(cur));
-  slider.value = curIdx;
-  const label = el("span", "play-label", cur || (points[curIdx] || ""));
-  slider.oninput = () => { label.textContent = points[+slider.value]; };
-  slider.onchange = () => { stopTopoPlay(); logClick("时间轴", points[+slider.value]); seek(points[+slider.value]); };
+  slider.type = "range"; slider.min = 0; slider.max = slots.length - 1; slider.value = 0;
+  const label = el("span", "play-label", slots[0]);
+  const seek = (i) => { label.textContent = slots[i]; logClick("天内时点", slots[i]);
+    viewTopologyAtSlot(tier, mode, tradeDate, slots[i]); };
+  slider.oninput = () => { label.textContent = slots[+slider.value]; };
+  slider.onchange = () => { stopTopoPlay(); seek(+slider.value); };
   btn.onclick = () => {
     if (TOPO_PLAY.playing) { stopTopoPlay(); btn.textContent = "▶"; return; }
-    TOPO_PLAY.playing = true; btn.textContent = "⏸"; logClick("播放回放", "");
-    // 若当前已在最后一帧，从头播放
-    let i = +slider.value;
-    if (i >= points.length - 1) i = -1;
+    TOPO_PLAY.playing = true; btn.textContent = "⏸"; logClick("播放当日回放", "");
+    let i = +slider.value; if (i >= slots.length - 1) i = -1;
     TOPO_PLAY.timer = setInterval(() => {
-      i += 1;
-      if (i >= points.length) { stopTopoPlay(); return; }
-      seek(points[i]);   // 逐帧重绘（viewTopology 重建含本 bar，playing 保留继续）
+      i += 1; if (i >= slots.length) { stopTopoPlay(); return; }
+      slider.value = i; seek(i);
     }, 3000);
   };
   bar.appendChild(btn); bar.appendChild(slider); bar.appendChild(label);
   return bar;
+}
+// 播放某日某时点的拓扑（下周一接盘中数据；现无逐时点，退化为当日 EOD）
+function viewTopologyAtSlot(tier, mode, tradeDate, _slot) {
+  // TODO(下周一)：按 slot 取当日该时刻拓扑。现无逐时点数据 → 用当日 EOD 拓扑占位。
+  viewTopology(tier, mode, tradeDate);
+}
+
+// ---- 日历选择器（原生，只高亮有数据的交易日）----
+// availableSet：可选日期集合(YYYY-MM-DD)；cur：当前选中；onPick(date)
+function buildCalendar(availableSet, cur, onPick) {
+  const wrap = el("div", "cal-wrap");
+  const trigger = el("button", "cal-trigger", `📅 ${cur || "选择日期"}`);
+  const pop = el("div", "cal-pop");
+  // 以当前选中日所在月为起点
+  const curD = cur ? new Date(cur + "T00:00:00") : new Date(2026, 6, 3);
+  let year = curD.getFullYear(), month = curD.getMonth();   // month 0-11
+  const pad = (n) => String(n).padStart(2, "0");
+  function render() {
+    pop.innerHTML = "";
+    const head = el("div", "cal-head");
+    const prev = el("button", "cal-nav", "‹"), next = el("button", "cal-nav", "›");
+    prev.onclick = (e) => { e.stopPropagation(); month--; if (month < 0) { month = 11; year--; } render(); };
+    next.onclick = (e) => { e.stopPropagation(); month++; if (month > 11) { month = 0; year++; } render(); };
+    head.appendChild(prev);
+    head.appendChild(el("span", "cal-title", `${year} 年 ${month + 1} 月`));
+    head.appendChild(next);
+    pop.appendChild(head);
+    const grid = el("div", "cal-grid");
+    ["一", "二", "三", "四", "五", "六", "日"].forEach((w) => grid.appendChild(el("div", "cal-wk", w)));
+    const first = new Date(year, month, 1);
+    let startDow = (first.getDay() + 6) % 7;   // 周一=0
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    for (let i = 0; i < startDow; i++) grid.appendChild(el("div", "cal-day empty"));
+    for (let d = 1; d <= daysInMonth; d++) {
+      const iso = `${year}-${pad(month + 1)}-${pad(d)}`;
+      const has = availableSet.has(iso);
+      const cell = el("div", "cal-day" + (has ? " avail" : " disabled") + (iso === cur ? " sel" : ""), String(d));
+      if (has) cell.onclick = (e) => { e.stopPropagation(); pop.classList.remove("open"); onPick(iso); };
+      grid.appendChild(cell);
+    }
+    pop.appendChild(grid);
+  }
+  trigger.onclick = (e) => { e.stopPropagation(); render(); pop.classList.toggle("open"); };
+  document.addEventListener("click", () => pop.classList.remove("open"));
+  wrap.appendChild(trigger); wrap.appendChild(pop);
+  return wrap;
 }
 
 // ---- 资金流向拓扑（spec006）：4 种视图 + 历史选日 + 时间轴回放 + 下钻 ----
@@ -330,20 +386,17 @@ async function viewTopology(tier = "main", mode = "sankey", tradeDate = "") {
     b.onclick = () => { logClick("切档位", label); viewTopology(t, mode, tradeDate); };
     tierToggle.appendChild(b);
   });
-  // 历史日期选择器
-  const dateSel = el("select", "date-sel");
+  // 历史日期选择器（日历，只可选有数据的交易日）
   if (!TOPO_DATES) {
     try { TOPO_DATES = (await api("/api/flow/topology/dates")).dates; } catch (_) { TOPO_DATES = []; }
   }
-  (TOPO_DATES || []).forEach((d, i) => {
-    const o = el("option", null, i === 0 ? `${d}（最新）` : d);
-    o.value = d; if (d === tradeDate) o.selected = true;
-    dateSel.appendChild(o);
-  });
-  dateSel.onchange = () => { logClick("选日期", dateSel.value); viewTopology(tier, mode, dateSel.value); };
+  const availSet = new Set(TOPO_DATES || []);
+  const curDate2 = tradeDate || (TOPO_DATES && TOPO_DATES[0]) || "";
+  const cal = buildCalendar(availSet, curDate2,
+    (d) => { logClick("选日期", d); viewTopology(tier, mode, d); });
   const row = el("div", "toggle-row"); row.appendChild(modeToggle); row.appendChild(tierToggle);
-  // 多天趋势不需要日期选择/回放/下钻（它本身就是跨多天）；其余模式才挂日期选择器
-  if (mode !== "trends") row.appendChild(dateSel);
+  // 多天趋势不需要日期选择/回放/下钻（它本身就是跨多天）；其余模式才挂日历
+  if (mode !== "trends") row.appendChild(cal);
   v.appendChild(row);
   const skel = el("div", "skeleton"); skel.style.height = "580px"; v.appendChild(skel);
 
@@ -386,13 +439,11 @@ async function viewTopology(tier = "main", mode = "sankey", tradeDate = "") {
     const draw = () => { box.innerHTML = ""; drawFns[mode](); };
     draw();
     CURRENT_REDRAW = draw;
-    // 时间轴回放条：按日升序回放（下周一换成当日每小时时点，此处仅换数据源）
-    const points = (TOPO_DATES || []).slice().reverse();   // 升序
-    const curDate = data.trade_date;
-    if (points.length > 1) {
-      v.appendChild(buildPlaybackBar(points, curDate,
-        (pt) => viewTopology(tier, mode, pt)));
-    }
+    // 天内时点回放条：播放选中日"当日"从早到晚的资金变化（近期分钟级、久远小时级）。
+    // 现在盘中分钟数据尚未攒够（下周一盘中调度器跑满一天后到位），此处按当日可用时点构建；
+    // 只有 EOD 一个点时显示占位提示，不空跑。
+    const dayPoints = await fetchIntradayPoints(tradeDate || data.trade_date);
+    v.appendChild(buildDayPlaybackBar(dayPoints, tier, mode, tradeDate || data.trade_date));
     const hint = {
       sankey: "点击行业看成分股 · 线宽=资金量 · 红净流入/绿净流出",
       sunburst: "内圈行业外圈个股 · 点个股看博弈 · 红净流入/绿净流出",

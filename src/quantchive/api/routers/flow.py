@@ -67,6 +67,15 @@ def get_flow_dates(conn=Depends(get_conn)) -> dict:
     return {"dates": FlowTopologyService(conn).available_dates(limit=60)}
 
 
+@topology_router.get("/topology/intraday_points")
+def get_intraday_points(
+    trade_date: str = Query(..., pattern=r"^\d{4}-\d{2}-\d{2}$"),
+    conn=Depends(get_conn),
+) -> dict:
+    """某日天内可播时点（盘中分钟/小时快照 slot 升序）。供天内回放。"""
+    return FlowTopologyService(conn).intraday_points(trade_date=trade_date)
+
+
 @topology_router.get("/topology/trends", response_model=SectorTrendsResult)
 def get_sector_trends(
     tier: str = Query("main", pattern="^(main|super_large|large|medium|small)$"),

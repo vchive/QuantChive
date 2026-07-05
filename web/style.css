@@ -269,3 +269,34 @@ footer { display: flex; align-items: flex-start; gap: var(--sp-4); }
 .play-btn:hover { background: var(--accent-hover); }
 .play-slider { flex: 1; accent-color: var(--accent); cursor: pointer; }
 .play-label { font-family: var(--font-num); font-size: var(--fs-label); color: var(--text); min-width: 92px; text-align: right; }
+
+/* 日历选择器 */
+.cal-wrap { position: relative; }
+.cal-trigger {
+  background: var(--panel); color: var(--text); border: 1px solid var(--border);
+  border-radius: var(--r-sm); padding: 5px 12px; font-size: var(--fs-label); cursor: pointer;
+  font-family: var(--font-num);
+}
+.cal-trigger:hover { border-color: var(--accent); }
+.cal-pop {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 200;
+  background: #fff; border: 1px solid #E3E7ED; border-radius: var(--r-md);
+  box-shadow: 0 8px 28px rgba(16,24,40,.18); padding: 10px; width: 252px; display: none;
+}
+.cal-pop.open { display: block; }
+.cal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.cal-title { font-size: var(--fs-body); font-weight: var(--fw-semi); color: #1A1F2B; }
+.cal-nav { background: #F2F4F7; border: 0; border-radius: var(--r-sm); width: 26px; height: 26px; cursor: pointer; color: #1A1F2B; font-size: 15px; }
+.cal-nav:hover { background: #E3E7ED; }
+.cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
+.cal-wk { text-align: center; font-size: var(--fs-cap); color: #99A1AE; padding: 4px 0; }
+.cal-day { text-align: center; padding: 6px 0; font-size: var(--fs-label); border-radius: var(--r-sm); font-family: var(--font-num); }
+.cal-day.empty { visibility: hidden; }
+.cal-day.disabled { color: #C2C8D2; }
+.cal-day.avail { color: #1A1F2B; cursor: pointer; background: #EAF1FF; }
+.cal-day.avail:hover { background: #2E6BE6; color: #fff; }
+.cal-day.sel { background: #2E6BE6; color: #fff; font-weight: var(--fw-semi); }
+
+/* 天内回放：占位提示态 */
+.playbar-disabled { color: var(--muted); }
+.play-hint { font-size: var(--fs-label); color: var(--muted); line-height: 1.5; }
