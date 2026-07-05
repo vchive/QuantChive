@@ -239,3 +239,25 @@ class FlowTopologyResult(_Base):
     expected_count: int
     nodes: list[FlowNode]
     links: list[FlowLink]
+
+
+class FlowTreeNode(_Base):
+    """资金流向层级树节点（旭日/矩形树用）。递归 children；net 带符号、gross 恒正。"""
+
+    name: str
+    net_yuan: str
+    gross_yuan: str | None = None
+    direction: str                 # 'in' | 'out' | 'flat'
+    subject_id: int | None = None
+    depth: int                     # 0 大盘 1 行业 2 个股
+    children: list["FlowTreeNode"] = []
+
+
+class FlowTreeResult(_Base):
+    """全层级资金流向树（大盘→行业→TopN个股，一次返回）。旭日/矩形树全景用。"""
+
+    trade_date: str
+    tier: str
+    provenance: DataProvenance
+    coverage_pct: str
+    root: FlowTreeNode

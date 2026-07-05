@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, Query
 
 from quantchive.api.deps import get_conn
 from quantchive.core.settings import get_settings
-from quantchive.service.dto import FlowTopologyResult, TiersSeriesResult
+from quantchive.service.dto import FlowTopologyResult, FlowTreeResult, TiersSeriesResult
 from quantchive.service.flow_query_service import FlowQueryService
 from quantchive.service.flow_topology_service import FlowTopologyService
 
@@ -54,3 +54,17 @@ def get_sector_stocks(
     """行业下钻：该 L1 行业成分股 TopN + 其他（桑基就地展开 / Treemap）。"""
     return FlowTopologyService(conn).get_sector_stocks(
         sector_id=sector_id, trade_date=trade_date, tier=tier, top_stocks=top_stocks)
+
+
+@topology_router.get("/topology/tree", response_model=FlowTreeResult)
+def get_flow_tree(
+    trade_date: str | None = Query(None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
+    tier: str = Query("main", pattern="^(main|super_large|large|medium|small)$"),
+    top_sectors: int = Query(30, ge=1, le=40),
+    top_stocks_per_sector: int = Query(8, ge=1, le=30),
+    conn=Depends(get_conn),
+) -> FlowTreeResult:
+    """全层级树：大盘→行业→个股一次返回。旭日图 / 矩形树全景用。"""
+    return FlowTopologyService(conn).get_tree(
+        trade_date=trade_date, tier=tier, top_sectors=top_sectors,
+        top_stocks_per_sector=top_stocks_per_sector)

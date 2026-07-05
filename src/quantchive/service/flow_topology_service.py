@@ -19,6 +19,8 @@ from quantchive.service.dto import (
     FlowLink,
     FlowNode,
     FlowTopologyResult,
+    FlowTreeNode,
+    FlowTreeResult,
 )
 from quantchive.service.errors import NoDataForDate
 from quantchive.service.l1_industry import build_l1_map
@@ -130,6 +132,89 @@ class FlowTopologyService:
         return FlowLink(
             source=source, target=target, abs_value=cents_to_yuan_str(abs(net)),
             signed_value=cents_to_yuan_str(net), direction=_direction(net))
+
+    def get_tree(
+        self, *, trade_date: str | None = None, tier: str = "main",
+        top_sectors: int = 30, top_stocks_per_sector: int = 8,
+    ) -> FlowTreeResult:
+        """全层级树：大盘→行业(TopN+其他)→各行业TopN个股(+其他)。旭日/矩形树全景一次返回。"""
+        if tier not in _TIER_COL:
+            raise NoDataForDate(f"未知档位 {tier}", detail={"tier": tier})
+        net_col = _TIER_COL[tier]
+        gross_col = _TIER_GROSS.get(tier)
+
+        if trade_date is None:
+            row = self._conn.execute(
+                "SELECT MAX(trade_date) FROM observation WHERE source_code=? AND value_type='daily_final'",
+                (self._source,)).fetchone()
+            trade_date = row[0] if row else None
+        if not trade_date:
+            raise NoDataForDate("无 sina_flow 日线数据", detail={})
+
+        rows = self._obs.stock_rows_for(
+            trade_date=trade_date, value_type=ValueType.DAILY_FINAL,
+            minute_slot="EOD", source_code=self._source)
+        valid = [r for r in rows if getattr(r, net_col) is not None]
+        if not valid:
+            raise NoDataForDate(f"{trade_date} 无个股档位数据", detail={"trade_date": trade_date})
+        expected = self._conn.execute(
+            "SELECT COUNT(*) FROM subject WHERE subject_kind='stock'").fetchone()[0]
+        coverage = len(valid) / expected if expected else 0.0
+
+        l1_map = build_l1_map(self._conn, as_of=trade_date)
+        ind_name = {
+            r[0]: r[1] for r in self._conn.execute(
+                "SELECT subject_id, display_name FROM subject WHERE subject_kind='industry'").fetchall()}
+
+        sector_stocks: dict[int, list] = {}
+        market_net = 0
+        for r in valid:
+            market_net += getattr(r, net_col)
+            sid = l1_map.get(r.subject_id)
+            if sid is not None:
+                sector_stocks.setdefault(sid, []).append(r)
+
+        # 各行业净额 + gross
+        sec_agg = []
+        for sid, sr in sector_stocks.items():
+            snet = sum(getattr(x, net_col) for x in sr)
+            sgross = sum(getattr(x, gross_col) for x in sr
+                         if gross_col and getattr(x, gross_col) is not None)
+            sec_agg.append((sid, snet, sgross, sr))
+        sec_agg.sort(key=lambda t: abs(t[1]), reverse=True)
+
+        def _stock_node(r):
+            net = getattr(r, net_col)
+            g = getattr(r, gross_col) if gross_col else None
+            return FlowTreeNode(
+                name=r.display_name, net_yuan=cents_to_yuan_str(net),
+                gross_yuan=cents_to_yuan_str(g) if g is not None else None,
+                direction=_direction(net), subject_id=r.subject_id, depth=2)
+
+        sector_nodes = []
+        for sid, snet, sgross, sr in sec_agg[:top_sectors]:
+            sr_sorted = sorted(sr, key=lambda x: abs(getattr(x, net_col)), reverse=True)
+            kids = [_stock_node(x) for x in sr_sorted[:top_stocks_per_sector]]
+            rest = sr_sorted[top_stocks_per_sector:]
+            if rest:
+                rnet = sum(getattr(x, net_col) for x in rest)
+                kids.append(FlowTreeNode(
+                    name=f"其他{len(rest)}只", net_yuan=cents_to_yuan_str(rnet),
+                    direction=_direction(rnet), depth=2))
+            sector_nodes.append(FlowTreeNode(
+                name=ind_name.get(sid, f"行业{sid}"), net_yuan=cents_to_yuan_str(snet),
+                gross_yuan=cents_to_yuan_str(sgross) if gross_col else None,
+                direction=_direction(snet), subject_id=sid, depth=1, children=kids))
+
+        root = FlowTreeNode(
+            name="A股大盘", net_yuan=cents_to_yuan_str(market_net),
+            direction=_direction(market_net), depth=0, children=sector_nodes)
+        prov = DataProvenance(
+            trade_date=trade_date, source_type=SourceType.DAILY_FINAL,
+            source_id=self._source, captured_at="EOD", is_stale=False)
+        return FlowTreeResult(
+            trade_date=trade_date, tier=tier, provenance=prov,
+            coverage_pct=f"{coverage * 100:.1f}", root=root)
 
     def get_sector_stocks(
         self, *, sector_id: int, trade_date: str | None = None, tier: str = "main",

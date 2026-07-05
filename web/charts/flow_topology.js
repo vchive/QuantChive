@@ -54,10 +54,15 @@ function renderFlowSankey(dom, data, onSectorClick) {
       data: nodes, links: links,
     }],
   });
-  // 点击行业节点 → 下钻
+  // 点击行业节点 → 下钻（按 id 回查原始节点，不依赖 ECharts 是否保留自定义字段）
+  const byId = {};
+  data.nodes.forEach((n) => { byId[n.id] = n; });
   chart.on("click", (pm) => {
-    if (pm.dataType === "node" && pm.data.depth === 1 && pm.data._sid != null && onSectorClick) {
-      onSectorClick(pm.data._sid, pm.data._label);
+    // sankey 节点 click：pm.name 是节点 id；边 click 有 source/target
+    const id = pm.name || (pm.data && pm.data.name);
+    const orig = byId[id];
+    if (orig && orig.depth === 1 && orig.subject_id != null && onSectorClick) {
+      onSectorClick(orig.subject_id, orig.name);
     }
   });
   window.addEventListener("resize", () => chart.resize());
@@ -95,6 +100,117 @@ function renderFlowTreemap(dom, data) {
       data: children,
       name: sec ? sec.name : "行业",
     }],
+  });
+  window.addEventListener("resize", () => chart.resize());
+  return chart;
+}
+
+
+/* 旭日图（Sunburst）：大盘→行业→个股 圈层，点击逐层钻取。data=tree 响应 */
+function renderFlowSunburst(dom, tree, onStockClick) {
+  const chart = echarts.init(dom, null, { renderer: "canvas" });
+  const c = _topoColors();
+  const conv = (n) => ({
+    name: n.name, value: Math.abs(parseFloat(n.gross_yuan || n.net_yuan)) || 1,
+    _net: n.net_yuan, _dir: n.direction, _sid: n.subject_id, _depth: n.depth,
+    itemStyle: { color: _dirColor(n.direction, c) },
+    children: (n.children || []).map(conv),
+  });
+  const root = conv(tree.root);
+  chart.setOption({
+    backgroundColor: "transparent",
+    tooltip: {
+      backgroundColor: c.TIP_BG, borderColor: c.TIP_BD, borderWidth: 1,
+      textStyle: { color: c.TIP_TX, fontSize: 12 }, extraCssText: "border-radius:8px;",
+      formatter: (pm) => {
+        const s = parseFloat(pm.data._net || 0);
+        return `${pm.name}<br/>净额 <b>${s >= 0 ? "+" : ""}${_yi(pm.data._net || "0")} 亿</b>`;
+      },
+    },
+    series: [{
+      type: "sunburst", data: root.children, radius: [0, "95%"],
+      center: ["50%", "50%"], sort: undefined,
+      emphasis: { focus: "ancestor" },
+      levels: [{}, { r0: "15%", r: "48%", label: { rotate: "tangential", fontSize: 11 } },
+        { r0: "48%", r: "80%", label: { align: "right", fontSize: 10 } }],
+      itemStyle: { borderColor: cssVar("--panel", "#fff"), borderWidth: 1 },
+      label: { color: "#fff" },
+    }],
+  });
+  chart.on("click", (pm) => {
+    if (pm.data && pm.data._depth === 2 && pm.data._sid != null && onStockClick) {
+      onStockClick(pm.data._sid, pm.name);
+    }
+  });
+  window.addEventListener("resize", () => chart.resize());
+  return chart;
+}
+
+/* 行业强弱排行（双向条）：各行业净额横向，红涨绿跌一屏排座次。data=topology 响应 */
+function renderSectorRanking(dom, data, onSectorClick) {
+  const chart = echarts.init(dom, null, { renderer: "canvas" });
+  const c = _topoColors();
+  const secs = data.nodes.filter((n) => n.depth === 1 && n.subject_id != null)
+    .map((n) => ({ name: n.name, sid: n.subject_id, net: parseFloat(n.net_yuan) / 1e8, dir: n.direction }))
+    .sort((a, b) => a.net - b.net);   // 升序，绿(流出)在下、红(流入)在上
+  chart.setOption({
+    backgroundColor: "transparent",
+    grid: { left: 90, right: 60, top: 12, bottom: 20 },
+    tooltip: {
+      backgroundColor: c.TIP_BG, borderColor: c.TIP_BD, borderWidth: 1,
+      textStyle: { color: c.TIP_TX, fontSize: 12 }, extraCssText: "border-radius:8px;",
+      formatter: (pm) => `${pm.name}<br/>主力净额 <b>${pm.value >= 0 ? "+" : ""}${pm.value.toFixed(2)} 亿</b>`,
+    },
+    xAxis: { type: "value", axisLabel: { color: c.LABEL, fontSize: 10, formatter: "{value}亿" },
+      splitLine: { lineStyle: { color: cssVar("--chart-grid", "rgba(0,0,0,0.06)") } },
+      axisLine: { show: false } },
+    yAxis: { type: "category", data: secs.map((s) => s.name),
+      axisLabel: { color: c.TIP_TX, fontSize: 11 }, axisLine: { lineStyle: { color: cssVar("--chart-axis", "#E3E7ED") } },
+      axisTick: { show: false } },
+    series: [{
+      type: "bar", data: secs.map((s) => ({ value: s.net, _sid: s.sid,
+        itemStyle: { color: _dirColor(s.dir, c), borderRadius: 3 },
+        label: { show: true, position: s.net >= 0 ? "right" : "left",
+          formatter: (p) => `${p.value >= 0 ? "+" : ""}${p.value.toFixed(1)}`,
+          color: c.LABEL, fontSize: 10 } })),
+      barMaxWidth: 16,
+    }],
+  });
+  chart.on("click", (pm) => {
+    if (pm.data && pm.data._sid != null && onSectorClick) onSectorClick(pm.data._sid, pm.name);
+  });
+  window.addEventListener("resize", () => chart.resize());
+  return chart;
+}
+
+/* 全市场矩形树（Treemap 全景）：所有行业一张图，面积=成交额、色=净额方向。data=tree 响应 */
+function renderMarketTreemap(dom, tree, onSectorClick) {
+  const chart = echarts.init(dom, null, { renderer: "canvas" });
+  const c = _topoColors();
+  const data = (tree.root.children || []).map((n) => ({
+    name: n.name, value: Math.abs(parseFloat(n.gross_yuan || n.net_yuan)) || 1,
+    _net: n.net_yuan, _sid: n.subject_id, itemStyle: { color: _dirColor(n.direction, c) },
+  }));
+  chart.setOption({
+    backgroundColor: "transparent",
+    tooltip: {
+      backgroundColor: c.TIP_BG, borderColor: c.TIP_BD, borderWidth: 1,
+      textStyle: { color: c.TIP_TX, fontSize: 12 }, extraCssText: "border-radius:8px;",
+      formatter: (pm) => {
+        const s = parseFloat(pm.data._net || 0);
+        return `${pm.name}<br/>净额 <b>${s >= 0 ? "+" : ""}${_yi(pm.data._net || "0")} 亿</b>`;
+      },
+    },
+    series: [{
+      type: "treemap", roam: false, nodeClick: false, breadcrumb: { show: false },
+      top: 8, left: 8, right: 8, bottom: 8,
+      label: { show: true, formatter: "{b}", color: "#fff", fontSize: 11 },
+      itemStyle: { borderColor: cssVar("--panel", "#fff"), borderWidth: 2, gapWidth: 2 },
+      data: data,
+    }],
+  });
+  chart.on("click", (pm) => {
+    if (pm.data && pm.data._sid != null && onSectorClick) onSectorClick(pm.data._sid, pm.name);
   });
   window.addEventListener("resize", () => chart.resize());
   return chart;
