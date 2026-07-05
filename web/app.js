@@ -294,10 +294,12 @@ function buildDayPlaybackBar(dayPoints, tier, mode, tradeDate) {
   const slots = dayPoints.slots || [];
   const bar = el("div", "playbar");
   if (slots.length < 2) {
-    // 当日无逐时点数据（现只 EOD）——占位提示，不空跑
+    // 当日无逐时点数据——占位提示（说清物理原因，不误导为"没做"）
     bar.classList.add("playbar-disabled");
     bar.appendChild(el("span", "play-hint",
-      `⏱ 天内时点回放：${tradeDate || "该日"} 暂无盘中逐时点数据（分钟/小时级），仅收盘快照。盘中运行满一天后可播当日资金流动。`));
+      `⏱ 天内时点回放：${tradeDate || "该日"} 无分钟/小时级数据。历史日线源仅提供每日收盘值（EOD），`
+      + `天内分钟数据只能由本平台盘中实时逐分钟采集积累——历史日无法补采（免费源不提供历史分钟资金流）。`
+      + `盘中调度器运行满一天后，当天即可播分钟级资金流动。`));
     return bar;
   }
   const btn = el("button", "play-btn", TOPO_PLAY.playing ? "⏸" : "▶");
