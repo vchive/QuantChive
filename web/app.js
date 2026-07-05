@@ -180,16 +180,23 @@ async function viewEtf() {
 }
 
 // ---- 视图：单主体时序（日线历史 / 当日分钟可切换）----
-async function viewSeries(subjectId, name, metric = "main_net", gran = "daily") {
+async function viewSeries(subjectId, name, metric = "main_net", gran = "daily", chartType = "main") {
   const v = $("view"); v.innerHTML = "";
   // 骨架屏（fetch 前）
   const skel = el("div", "skeleton"); skel.style.height = "520px"; skel.style.margin = "12px 0";
   v.appendChild(skel);
+  // 图型切换（主图 / 热力 / 回放 / 对抗）
+  const chartToggle = el("div", "gran-toggle");
+  [["main", "博弈主图"], ["heatmap", "四档热力"], ["replay", "逐分钟回放"], ["battle", "对抗象限"]].forEach(([ct, label]) => {
+    const b = el("button", "gran" + (ct === chartType ? " active" : ""), label);
+    b.onclick = () => viewSeries(subjectId, name, metric, ct === "replay" ? "intraday" : gran, ct);
+    chartToggle.appendChild(b);
+  });
   // 粒度切换
   const toggle = el("div", "gran-toggle");
   [["daily", "日线历史"], ["intraday", "当日分钟"]].forEach(([g, label]) => {
     const b = el("button", "gran" + (g === gran ? " active" : ""), label);
-    b.onclick = () => viewSeries(subjectId, name, metric, g);
+    b.onclick = () => viewSeries(subjectId, name, metric, g, chartType);
     toggle.appendChild(b);
   });
   try {
@@ -223,14 +230,24 @@ async function viewSeries(subjectId, name, metric = "main_net", gran = "daily") 
     stat("截至", last.ts || "—", "");
     header.appendChild(stats);
     v.appendChild(header);
-    v.appendChild(toggle);
-    // —— 主图 ——
+    // 图型 + 粒度切换（一行两组）
+    const toggleRow = el("div", "toggle-row");
+    toggleRow.appendChild(chartToggle);
+    toggleRow.appendChild(toggle);
+    v.appendChild(toggleRow);
+    // —— 图表 ——
     const chartBox = el("div", "flow-chart");
     chartBox.style.height = "520px";
     v.appendChild(chartBox);
-    renderMainChart(chartBox, data);
-    // 主题切换时重绘本图
-    CURRENT_REDRAW = () => { chartBox.innerHTML = ""; renderMainChart(chartBox, data); };
+    const draw = () => {
+      chartBox.innerHTML = "";
+      if (chartType === "heatmap") renderHeatmapRibbon(chartBox, data);
+      else if (chartType === "replay") renderReplay(chartBox, data);
+      else if (chartType === "battle") renderBattleQuadrant(chartBox, data);
+      else renderMainChart(chartBox, data);
+    };
+    draw();
+    CURRENT_REDRAW = draw;   // 主题切换重绘当前图型
     const divTxt = (data.divergence || []).map((d) => d.kind === "accumulation" ? "吸筹" : "派发").join("、");
     v.appendChild(el("div", "sub",
       `${data.points.length} 点`

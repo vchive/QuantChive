@@ -22,6 +22,7 @@ from quantchive.dao.subject_dao import SubjectDao
 from quantchive.datasource._collector_base import run_per_subject
 from quantchive.datasource._http_client import is_degraded
 from quantchive.datasource.base import DataSourceError, ObservationSource
+from quantchive.datasource.validate import check_identity
 from quantchive.models.enums import (
     Caliber, RunStatus, RunType, SectorType, SubjectKind, ValueType,
 )
@@ -768,6 +769,27 @@ def backfill_flow_history(
         for o in bars:
             if not o.trade_date:
                 continue
+            # 四档 gross/net 整数分
+            gross_cents = None
+            if o.super_large_gross is not None:
+                gross_cents = {
+                    "super_large_gross_cents": to_cents(o.super_large_gross, unit),
+                    "large_gross_cents": to_cents(o.large_gross, unit),
+                    "medium_gross_cents": to_cents(o.medium_gross, unit),
+                    "small_gross_cents": to_cents(o.small_gross, unit),
+                }
+                # T013 恒等式自检：坏数据拒入库（宪章 V，只跳过记审计不改数）
+                nets = {"super_large_gross_cents": o.super_large_net, "large_gross_cents": o.large_net,
+                        "medium_gross_cents": o.medium_net, "small_gross_cents": o.small_net}
+                bad = False
+                for gk, gv in gross_cents.items():
+                    nv = nets[gk]
+                    if nv is None or not check_identity(gv, to_cents(nv, unit)).ok:
+                        bad = True
+                        break
+                if bad:
+                    gross_cents = None      # 该行 gross 不落（四档全有或全无），保留 net
+                    counters["identity_rejected"] = counters.get("identity_rejected", 0) + 1
             obs_dao.upsert(
                 subject_id=s["subject_id"], source_code=source_code,
                 trade_date=o.trade_date, minute_slot="EOD",
@@ -782,12 +804,7 @@ def backfill_flow_history(
                     "medium_net_cents": to_cents(o.medium_net, unit) if o.medium_net is not None else 0,
                     "small_net_cents": to_cents(o.small_net, unit) if o.small_net is not None else 0,
                 } if o.main_net is not None else None,
-                four_gross={
-                    "super_large_gross_cents": to_cents(o.super_large_gross, unit),
-                    "large_gross_cents": to_cents(o.large_gross, unit),
-                    "medium_gross_cents": to_cents(o.medium_gross, unit),
-                    "small_gross_cents": to_cents(o.small_gross, unit),
-                } if o.super_large_gross is not None else None,  # 四档gross全有或全无
+                four_gross=gross_cents,
                 source_unit=unit.value, ingestion_run_id=run_id, created_at=now_iso)
             wrote += 1
         if wrote:

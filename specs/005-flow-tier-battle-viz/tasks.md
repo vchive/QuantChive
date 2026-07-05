@@ -69,8 +69,8 @@ description: "Task list for 005-flow-tier-battle-viz"
 
 **Independent Test**: 4行(超大/大/中/小)×时间heatmap，色=净额红入绿出、明度=幅度 + 对齐价格sparkline。
 
-- [ ] T019 [P] [US2] 新 `web/charts/heatmap_ribbon.js`：四档热力条带 ECharts option（heatmap + 对齐价格sparkline）
-- [ ] T020 [US2] 改 `web/app.js`：加"热力条带"视图切换，复用 tiers_series 数据
+- [x] T019 [P] [US2] 新 `web/charts/heatmap_ribbon.js`：四档热力条带 ECharts option（heatmap + 对齐价格sparkline）
+- [x] T020 [US2] 改 `web/app.js`：加"热力条带"视图切换，复用 tiers_series 数据
 
 **Checkpoint**: 主图 + 热力双视图。**独立可交付。**
 
@@ -83,13 +83,13 @@ description: "Task list for 005-flow-tier-battle-viz"
 **Independent Test**: mock 分钟序列 → timeline回放四档净额柱逐帧 + 价格竖线随帧移动；非交易日优雅提示。
 
 ### Tests for US3
-- [ ] T021 [P] [US3] 集成测试 in `tests/integration/test_intraday_archive.py`：盘中东财净额每分钟归档为 granularity='1min' 序列（各档只净额，has_gross=false）（先失败）
+- [x] T021 [P] [US3] 集成测试 in `tests/integration/test_intraday_archive.py`：盘中东财净额每分钟归档为 granularity='1min' 序列（各档只净额，has_gross=false）（先失败）
 
 ### Implementation for US3
-- [ ] T022 [US3] 改 `scheduler/jobs.py`：盘中分钟归档 job（东财 clist 净额 → 落库 1min 序列，依赖调度器盘中运行）。**东财 clist 各档净额字段已现成**（em_stock_src 已取 f62主力/f66超大/f72大/f78中/f84小 → super_large/large/medium/small_net），归档直接复用现有 stock 采集的四档净额，无需新取字段（analyze U2 已实测确认）
-- [ ] T023 [US3] `service/flow_query_service.py`：tiers_series granularity='intraday' 分支（读分钟净额，has_gross=false，只返净额）
-- [ ] T024 [US3] 新 `web/charts/replay.js`：逐分钟回放 ECharts（timeline外壳 + 四档净额柱appendData + 价格markLine随帧 + play/scrub）
-- [ ] T025 [US3] 改 `web/app.js`：盘中回放视图接线，intraday 粒度只画净额博弈
+- [x] T022 [US3] 改 `scheduler/jobs.py`：盘中分钟归档 job（东财 clist 净额 → 落库 1min 序列，依赖调度器盘中运行）。**东财 clist 各档净额字段已现成**（em_stock_src 已取 f62主力/f66超大/f72大/f78中/f84小 → super_large/large/medium/small_net），归档直接复用现有 stock 采集的四档净额，无需新取字段（analyze U2 已实测确认）
+- [x] T023 [US3] `service/flow_query_service.py`：tiers_series granularity='intraday' 分支（读分钟净额，has_gross=false，只返净额）
+- [x] T024 [US3] 新 `web/charts/replay.js`：逐分钟回放 ECharts（timeline外壳 + 四档净额柱appendData + 价格markLine随帧 + play/scrub）
+- [x] T025 [US3] 改 `web/app.js`：盘中回放视图接线，intraday 粒度只画净额博弈
 
 **Checkpoint**: 盘中主力vs散户净额逐分钟回放。**独立可交付。**
 
@@ -102,12 +102,12 @@ description: "Task list for 005-flow-tier-battle-viz"
 **Independent Test**: mock 新浪+百度同股当日 → 恒等式坏拒入库、方向反/量级差>3倍标记divergence、口径差异不报、只标记不改数。
 
 ### Tests for US4
-- [ ] T026 [P] [US4] 单测 in `tests/unit/test_flow_validate.py`：恒等式自检拒坏数据、跨源方向/量级抓异常、口径差异不报（先失败）
-- [ ] T027 [P] [US4] 契约测试百度探针 in `tests/contract/test_baidu_flow_src.py`：注入 fake page（evaluate返固定JSON）→ 解析四档 gross+net 归一，不联网（先失败）
+- [x] T026 [P] [US4] 单测 in `tests/unit/test_flow_validate.py`：恒等式自检拒坏数据、跨源方向/量级抓异常、口径差异不报（先失败）
+- [x] T027 [P] [US4] 契约测试百度探针 in `tests/contract/test_baidu_flow_src.py`：注入 fake page（evaluate返固定JSON）→ 解析四档 gross+net 归一，不联网（先失败）
 
 ### Implementation for US4
-- [ ] T028 [US4] 新 `datasource/baidu_flow_src.py`：无头浏览器校验探针（page_factory可注入，page.evaluate内fetch多股，解析fundFlowSpread）per [contracts/source-adapter.md](./contracts/source-adapter.md)
-- [ ] T029 [US4] 新 `datasource/validate.py`：check_identity + cross_source_verdict(默认3倍) + record_validation（只标记记审计不改数）
+- [x] T028 [US4] 新 `datasource/baidu_flow_src.py`：无头浏览器校验探针（page_factory可注入，page.evaluate内fetch多股，解析fundFlowSpread）per [contracts/source-adapter.md](./contracts/source-adapter.md)
+- [x] T029 [US4] 新 `datasource/validate.py`：check_identity + cross_source_verdict(默认3倍) + record_validation（只标记记审计不改数）
 - [ ] T030 [US4] 改 `service/ingest_service.py`：收盘后百度抽样(几十只+轮换) → 跟新浪当日跨源校验 → 记审计
 - [ ] T031 [US4] 改 `service/flow_query_service.py` + `api/routers/flow.py`：provenance.validation 角标(ok/divergence)下发
 - [ ] T032 [US4] 改 `web/app.js`：数据来源角标显示"✓校验通过/⚠️口径分歧"，不弹窗
@@ -123,13 +123,13 @@ description: "Task list for 005-flow-tier-battle-viz"
 **Independent Test**: mock 板块成分各有四档gross → 板块四档=成分求和(≥覆盖率门禁)，覆盖不足不落假值。
 
 ### Tests for US5
-- [ ] T033 [P] [US5] 集成测试 in `tests/integration/test_sector_tier_derive.py`：板块四档=成分求和、覆盖率门禁、宁缺勿假（先失败）
+- [x] T033 [P] [US5] 集成测试 in `tests/integration/test_sector_tier_derive.py`：板块四档=成分求和、覆盖率门禁、宁缺勿假（先失败）
 
 ### Implementation for US5
 - [ ] T034 [US5] 改 `service/ingest_service.py`：板块四档 gross/net 由成分股求和派生（仿 market_aggregate，**复用 settings.market_coverage_threshold 门禁**，≥门禁才落、覆盖不足不落假值；**盘后派生落 is_derived=1 的 observation**，不查询时重算全成分，analyze U1/C1 已锁定）
 - [ ] T035 [US5] `service/flow_query_service.py`：板块 tiers_series 读**盘后派生落库的 is_derived 行**（不查询时重算全成分，与 T034 锁定一致）
-- [ ] T036 [P] [US5] 新 `web/charts/battle_quadrant.js`：对抗图（主力vs散户镜像面积 + 象限散点，x=涨跌幅 y=主力净额，高亮逆势吸筹象限）
-- [ ] T037 [US5] 改 `web/app.js`：板块四档视图 + 对抗图接线
+- [x] T036 [P] [US5] 新 `web/charts/battle_quadrant.js`：对抗图（主力vs散户镜像面积 + 象限散点，x=涨跌幅 y=主力净额，高亮逆势吸筹象限）
+- [x] T037 [US5] 改 `web/app.js`：板块四档视图 + 对抗图接线
 
 **Checkpoint**: 板块博弈 + 对抗选股。**独立可交付。**
 
@@ -139,7 +139,7 @@ description: "Task list for 005-flow-tier-battle-viz"
 
 - [ ] T038 [P] 降采扩展 `service/ingest_service.py` retention_downsample：分钟→小时处理 4档net+4档gross（取小时末累计快照）；+ 单测 `tests/unit/test_downsample_tiers.py`
 - [ ] T039 [P] 新 `datasource/tushare_flow_src.py`：预留适配器（能力声明 is_active=0，fetch 抛 NotImplementedError + "未开通token"日志）
-- [ ] T040 [P] 新 `docs/flow-terms-guide.md`：术语表（超大单/主力/散户/净流入/流入流出/背离/吸筹/派发）+ 四视图看图指南（交付用户，不进产品）
+- [x] T040 [P] 新 `docs/flow-terms-guide.md`：术语表（超大单/主力/散户/净流入/流入流出/背离/吸筹/派发）+ 四视图看图指南（交付用户，不进产品）
 - [ ] T041 [P] 更新 `README.md`：资金档位博弈可视化 + 多源(新浪gross/百度探针/Tushare预留) + 三层存储 + 校验
 - [ ] T042 更新 [quickstart.md](./quickstart.md) 6 场景跑通（mock 部分）
 - [ ] T043 真实联网验证（手动，非CI）：重建库→新浪回填四档gross→百度探针抽样校验→起服务看中国船舶主图博弈+背离；盘中(开盘)验证分钟归档 + 探新浪实时gross
