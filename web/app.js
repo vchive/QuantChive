@@ -283,6 +283,7 @@ const TOPO_PLAY = { timer: null, playing: false };
 function stopTopoPlay() {
   if (TOPO_PLAY.timer) { clearInterval(TOPO_PLAY.timer); TOPO_PLAY.timer = null; }
   TOPO_PLAY.playing = false;
+  if (typeof stopDayCross === "function") stopDayCross();   // 同时停跨天回放
 }
 async function fetchIntradayPoints(tradeDate) {
   if (!tradeDate) return { slots: [], granularity: "eod" };
@@ -323,6 +324,37 @@ function buildDayPlaybackBar(dayPoints, tier, mode, tradeDate) {
 function viewTopologyAtSlot(tier, mode, tradeDate, _slot) {
   // TODO(下周一)：按 slot 取当日该时刻拓扑。现无逐时点数据 → 用当日 EOD 拓扑占位。
   viewTopology(tier, mode, tradeDate);
+}
+
+// ---- 跨天回放（一帧一天，看资金流向多日演变；数据现成，可用）----
+const TOPO_DAYPLAY = { timer: null, playing: false };
+function stopDayCross() {
+  if (TOPO_DAYPLAY.timer) { clearInterval(TOPO_DAYPLAY.timer); TOPO_DAYPLAY.timer = null; }
+  TOPO_DAYPLAY.playing = false;
+}
+// dates 升序；cur 当前日；tier/mode 供重绘
+function buildCrossDayBar(dates, cur, tier, mode) {
+  const bar = el("div", "playbar");
+  bar.appendChild(el("span", "play-cap", "跨天"));
+  const btn = el("button", "play-btn", TOPO_DAYPLAY.playing ? "⏸" : "▶");
+  const slider = el("input", "play-slider");
+  slider.type = "range"; slider.min = 0; slider.max = dates.length - 1;
+  slider.value = Math.max(0, dates.indexOf(cur));
+  const label = el("span", "play-label", cur);
+  const seek = (i) => { label.textContent = dates[i]; logClick("跨天回放", dates[i]); viewTopology(tier, mode, dates[i]); };
+  slider.oninput = () => { label.textContent = dates[+slider.value]; };
+  slider.onchange = () => { stopDayCross(); seek(+slider.value); };
+  btn.onclick = () => {
+    if (TOPO_DAYPLAY.playing) { stopDayCross(); btn.textContent = "▶"; return; }
+    TOPO_DAYPLAY.playing = true; btn.textContent = "⏸"; logClick("播放跨天", "");
+    let i = +slider.value; if (i >= dates.length - 1) i = -1;
+    TOPO_DAYPLAY.timer = setInterval(() => {
+      i += 1; if (i >= dates.length) { stopDayCross(); return; }
+      seek(i);   // viewTopology 重建含本条，playing 保留继续
+    }, 3000);
+  };
+  bar.appendChild(btn); bar.appendChild(slider); bar.appendChild(label);
+  return bar;
 }
 
 // ---- 日历选择器（原生，只高亮有数据的交易日）----
@@ -439,6 +471,11 @@ async function viewTopology(tier = "main", mode = "sankey", tradeDate = "") {
     const draw = () => { box.innerHTML = ""; drawFns[mode](); };
     draw();
     CURRENT_REDRAW = draw;
+    // 跨天回放（一帧一天，看资金流向多日演变——数据现成，能用）
+    const daysAsc = (TOPO_DATES || []).slice().reverse();
+    if (daysAsc.length > 1) {
+      v.appendChild(buildCrossDayBar(daysAsc, tradeDate || data.trade_date, tier, mode));
+    }
     // 天内时点回放条：播放选中日"当日"从早到晚的资金变化（近期分钟级、久远小时级）。
     // 现在盘中分钟数据尚未攒够（下周一盘中调度器跑满一天后到位），此处按当日可用时点构建；
     // 只有 EOD 一个点时显示占位提示，不空跑。

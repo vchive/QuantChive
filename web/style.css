@@ -300,3 +300,6 @@ footer { display: flex; align-items: flex-start; gap: var(--sp-4); }
 /* 天内回放：占位提示态 */
 .playbar-disabled { color: var(--muted); }
 .play-hint { font-size: var(--fs-label); color: var(--muted); line-height: 1.5; }
+
+/* 回放条前缀标签 */
+.play-cap { font-size: var(--fs-cap); color: var(--muted); background: var(--panel-2); padding: 3px 8px; border-radius: var(--r-sm); flex-shrink: 0; }
