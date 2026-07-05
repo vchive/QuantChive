@@ -276,7 +276,41 @@ async function viewSeries(subjectId, name, metric = "main_net", gran = "daily", 
   }
 }
 
-// ---- 资金流向拓扑（spec006）：4 种视图 + 历史选日 + 下钻 ----
+// ---- 时间轴回放框架（数据源无关：现为按日，下周一换当日每小时，UI/逻辑复用）----
+// TOPO_PLAY.playing 跨重绘保留；seek/播放都调 viewTopology(tier,mode,point)。
+const TOPO_PLAY = { timer: null, playing: false };
+function stopTopoPlay() {
+  if (TOPO_PLAY.timer) { clearInterval(TOPO_PLAY.timer); TOPO_PLAY.timer = null; }
+  TOPO_PLAY.playing = false;
+}
+// points：时间点数组(升序)；cur：当前值；seek(point)：跳到该点重绘
+function buildPlaybackBar(points, cur, seek) {
+  const bar = el("div", "playbar");
+  const btn = el("button", "play-btn", TOPO_PLAY.playing ? "⏸" : "▶");
+  const slider = el("input", "play-slider");
+  slider.type = "range"; slider.min = 0; slider.max = Math.max(0, points.length - 1);
+  const curIdx = Math.max(0, points.indexOf(cur));
+  slider.value = curIdx;
+  const label = el("span", "play-label", cur || (points[curIdx] || ""));
+  slider.oninput = () => { label.textContent = points[+slider.value]; };
+  slider.onchange = () => { stopTopoPlay(); logClick("时间轴", points[+slider.value]); seek(points[+slider.value]); };
+  btn.onclick = () => {
+    if (TOPO_PLAY.playing) { stopTopoPlay(); btn.textContent = "▶"; return; }
+    TOPO_PLAY.playing = true; btn.textContent = "⏸"; logClick("播放回放", "");
+    // 若当前已在最后一帧，从头播放
+    let i = +slider.value;
+    if (i >= points.length - 1) i = -1;
+    TOPO_PLAY.timer = setInterval(() => {
+      i += 1;
+      if (i >= points.length) { stopTopoPlay(); return; }
+      seek(points[i]);   // 逐帧重绘（viewTopology 重建含本 bar，playing 保留继续）
+    }, 1200);
+  };
+  bar.appendChild(btn); bar.appendChild(slider); bar.appendChild(label);
+  return bar;
+}
+
+// ---- 资金流向拓扑（spec006）：4 种视图 + 历史选日 + 时间轴回放 + 下钻 ----
 let TOPO_DATES = null;   // 缓存可选日期
 async function viewTopology(tier = "main", mode = "sankey", tradeDate = "") {
   const v = $("view"); v.innerHTML = "";
@@ -316,8 +350,8 @@ async function viewTopology(tier = "main", mode = "sankey", tradeDate = "") {
   const url = useTree
     ? `/api/flow/topology/tree?tier=${tier}&top_sectors=30${dq}`
     : `/api/flow/topology?tier=${tier}&top_sectors=20${dq}`;
-  const onSector = (sid, sn) => { logClick("下钻行业", sn); push(sn + " 成分", () => viewSectorTreemap(sid, sn, tier, tradeDate)); };
-  const onStock = (sid, sn) => { logClick("下钻个股", sn); push(sn, () => viewSeries(sid, sn, "main_net", "daily", "main")); };
+  const onSector = (sid, sn) => { stopTopoPlay(); logClick("下钻行业", sn); push(sn + " 成分", () => viewSectorTreemap(sid, sn, tier, tradeDate)); };
+  const onStock = (sid, sn) => { stopTopoPlay(); logClick("下钻个股", sn); push(sn, () => viewSeries(sid, sn, "main_net", "daily", "main")); };
   try {
     const data = await api(url);
     v.innerHTML = ""; v.appendChild(el("h2", null, title)); v.appendChild(row);
@@ -331,6 +365,13 @@ async function viewTopology(tier = "main", mode = "sankey", tradeDate = "") {
     const draw = () => { box.innerHTML = ""; drawFns[mode](); };
     draw();
     CURRENT_REDRAW = draw;
+    // 时间轴回放条：按日升序回放（下周一换成当日每小时时点，此处仅换数据源）
+    const points = (TOPO_DATES || []).slice().reverse();   // 升序
+    const curDate = data.trade_date;
+    if (points.length > 1) {
+      v.appendChild(buildPlaybackBar(points, curDate,
+        (pt) => viewTopology(tier, mode, pt)));
+    }
     const hint = {
       sankey: "点击行业看成分股 · 线宽=资金量 · 红净流入/绿净流出",
       sunburst: "内圈行业外圈个股 · 点个股看博弈 · 红净流入/绿净流出",
@@ -366,6 +407,7 @@ async function viewSectorTreemap(sectorId, sectorName, tier, tradeDate = "") {
 // ---- 品种 Tab 切换：重置栈到根视图 ----
 function selectAsset(asset) {
   ASSET = asset;
+  stopTopoPlay();   // 切 tab 停回放
   document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.asset === asset));
   stack.length = 0;
   if (asset === "a_share") push("大盘", viewMarket);

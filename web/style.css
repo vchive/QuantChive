@@ -262,3 +262,10 @@ td.link:hover { color: var(--accent-hover); text-decoration: underline; }
 .cl-row { color: var(--muted); font-family: var(--font-num); line-height: 1.7; border-bottom: 1px solid var(--border-weak); }
 .cl-row:first-child { color: var(--text); }
 footer { display: flex; align-items: flex-start; gap: var(--sp-4); }
+
+/* 时间轴回放条 */
+.playbar { display: flex; align-items: center; gap: var(--sp-3); margin: var(--sp-3) 0; padding: var(--sp-2) var(--sp-3); background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-sm); }
+.play-btn { width: 32px; height: 32px; border-radius: 50%; border: 1px solid var(--border); background: var(--accent); color: #fff; cursor: pointer; font-size: 13px; flex-shrink: 0; }
+.play-btn:hover { background: var(--accent-hover); }
+.play-slider { flex: 1; accent-color: var(--accent); cursor: pointer; }
+.play-label { font-family: var(--font-num); font-size: var(--fs-label); color: var(--text); min-width: 92px; text-align: right; }
