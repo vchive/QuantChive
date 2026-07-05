@@ -204,3 +204,38 @@ class TiersSeriesResult(_Base):
     points: list[TierPoint]
     divergence: list[DivergenceSegment]
     gap_count: int
+
+
+class FlowNode(_Base):
+    """资金流向拓扑节点：大盘/行业/个股。net 带符号(元字符串)，gross 恒正。"""
+
+    id: str                        # 唯一键：'market' | 'sector:{sid}' | 'stock:{sid}' | 'other:{parent}'
+    name: str
+    depth: int                     # 0 大盘 | 1 行业 | 2 个股
+    net_yuan: str                  # 净额(带符号)
+    gross_yuan: str | None = None  # 成交额(恒正，Treemap 面积用)
+    direction: str                 # 'in' 净流入 | 'out' 净流出 | 'flat'
+    subject_id: int | None = None  # 可下钻的真实主体(个股/行业)，聚合节点为 None
+
+
+class FlowLink(_Base):
+    """资金流向边：父→子。abs_value 定线宽(恒正)，signed_value 带符号供 tooltip。"""
+
+    source: str                    # 父节点 id
+    target: str                    # 子节点 id
+    abs_value: str                 # |净额| 元(线宽)
+    signed_value: str              # 带符号净额
+    direction: str                 # 'in' | 'out' | 'flat'
+
+
+class FlowTopologyResult(_Base):
+    """资金流向拓扑（spec006）。单日快照，大盘→行业(→个股懒加载)。只做日线历史。"""
+
+    trade_date: str
+    tier: str                      # 'main' | 'super_large' | 'large' | 'medium' | 'small'
+    provenance: DataProvenance
+    coverage_pct: str              # 覆盖率(诚实标注，93%=漏未覆盖成分)
+    constituent_count: int
+    expected_count: int
+    nodes: list[FlowNode]
+    links: list[FlowLink]

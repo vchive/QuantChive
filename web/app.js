@@ -264,12 +264,57 @@ async function viewSeries(subjectId, name, metric = "main_net", gran = "daily", 
   }
 }
 
+// ---- 资金流向拓扑（spec006）：大盘→行业桑基 + 行业下钻 Treemap ----
+async function viewTopology(tier = "main") {
+  const v = $("view"); v.innerHTML = "";
+  v.appendChild(el("h2", null, "资金流向拓扑 · 大盘 → 行业 → 个股"));
+  // 档位切换
+  const tierToggle = el("div", "gran-toggle");
+  [["main", "主力"], ["super_large", "超大单"], ["large", "大单"], ["medium", "中单"], ["small", "小单"]].forEach(([t, label]) => {
+    const b = el("button", "gran" + (t === tier ? " active" : ""), label);
+    b.onclick = () => viewTopology(t);
+    tierToggle.appendChild(b);
+  });
+  v.appendChild(tierToggle);
+  const skel = el("div", "skeleton"); skel.style.height = "560px"; v.appendChild(skel);
+  try {
+    const data = await api(`/api/flow/topology?tier=${tier}&top_sectors=20`);
+    v.innerHTML = ""; v.appendChild(el("h2", null, "资金流向拓扑 · 大盘 → 行业 → 个股"));
+    v.appendChild(tierToggle);
+    const box = el("div", "flow-chart"); box.style.height = "560px"; v.appendChild(box);
+    const chart = renderFlowSankey(box, data, (sectorId, sectorName) => viewSectorTreemap(sectorId, sectorName, tier));
+    CURRENT_REDRAW = () => { box.innerHTML = ""; renderFlowSankey(box, data, (sid, sn) => viewSectorTreemap(sid, sn, tier)); };
+    v.appendChild(el("div", "sub",
+      `${data.trade_date} · 覆盖 ${data.coverage_pct}%（${data.constituent_count}/${data.expected_count}只）· 点击行业看成分股 · 红=净流入 绿=净流出`));
+    setProvenance(data.provenance);
+  } catch (e) {
+    v.innerHTML = ""; v.appendChild(el("h2", null, "资金流向拓扑"));
+    v.appendChild(el("div", "hint", e.code === "NO_DATA_FOR_DATE" ? (e.message || "无数据") : `${e.code}: ${e.message}`));
+  }
+}
+
+async function viewSectorTreemap(sectorId, sectorName, tier) {
+  push(sectorName + " 成分", () => viewSectorTreemap(sectorId, sectorName, tier));
+  const v = $("view"); v.innerHTML = "";
+  v.appendChild(el("h2", null, `${sectorName} · 成分股资金分布`));
+  v.appendChild(el("div", "sub", "面积=成交额 · 颜色：红净流入/绿净流出 · 点股看博弈"));
+  const box = el("div", "flow-chart"); box.style.height = "520px"; v.appendChild(box);
+  try {
+    const data = await api(`/api/flow/topology/sector/${sectorId}?tier=${tier}&top_stocks=30`);
+    renderFlowTreemap(box, data);
+    CURRENT_REDRAW = () => { box.innerHTML = ""; renderFlowTreemap(box, data); };
+  } catch (e) {
+    box.appendChild(el("div", "hint", `${e.code}: ${e.message}`));
+  }
+}
+
 // ---- 品种 Tab 切换：重置栈到根视图 ----
 function selectAsset(asset) {
   ASSET = asset;
   document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.asset === asset));
   stack.length = 0;
   if (asset === "a_share") push("大盘", viewMarket);
+  else if (asset === "topology") push("资金流向", () => viewTopology("main"));
   else push("ETF", viewEtf);
 }
 

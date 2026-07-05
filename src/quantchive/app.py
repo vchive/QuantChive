@@ -74,6 +74,7 @@ def create_app() -> FastAPI:
     app.add_exception_handler(QueryError, query_error_handler)
     for r in (sectors, market, stocks, etf, funds, meta, subjects, health, flow):
         app.include_router(r.router)
+    app.include_router(flow.topology_router)
     if _WEB_DIR.exists():
         app.mount("/", StaticFiles(directory=str(_WEB_DIR), html=True), name="web")
     return app
