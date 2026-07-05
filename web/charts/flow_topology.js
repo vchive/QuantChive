@@ -66,18 +66,29 @@ function renderFlowSankey(dom, data, onSectorClick) {
     if (orig) fire(orig.subject_id, orig.name);
   });
   // zrender 兜底：ECharts sankey 节点不触发 chart.on('click')（图元 dataIndex 为 null）。
-  // 在 zrender 层按点击像素命中 node 矩形。rect 按 series.data 顺序渲染 → 序号对齐节点。
-  // 用 getBoundingRect().applyTransform 取图元世界坐标（transform[4] 不含 shape 偏移）。
+  // 用图元自带 el.contain(x,y) 精确命中（曲线真实形状，非矩形近似）。
+  // 命中节点矩形 → 该行业；命中流向色带 → 其目标行业。都可下钻，点击区域大。
+  const sectorLinks = (data.links || []).filter((l) => l.target && l.target.indexOf("sector:") === 0);
   chart.getZr().on("click", (e) => {
     const nodes = chart.getOption().series[0].data;
-    const rects = chart.getZr().storage.getDisplayList().filter((el) => el.type === "rect");
-    const px = e.offsetX, py = e.offsetY;
+    const list = chart.getZr().storage.getDisplayList();
+    const rects = list.filter((el) => el.type === "rect");
+    const paths = list.filter((el) => el.type === "path");
+    const x = e.offsetX, y = e.offsetY;
+    // ① 先命中节点矩形（rect[i] ↔ nodes[i]）
     for (let i = 0; i < rects.length; i++) {
-      const br = rects[i].getBoundingRect().clone();
-      br.applyTransform(rects[i].transform);
-      if (px >= br.x && px <= br.x + br.width && py >= br.y && py <= br.y + br.height) {
+      if (rects[i].contain(x, y)) {
         const n = nodes[i];
         if (n && n._sid != null) fire(n._sid, n._label);
+        return;
+      }
+    }
+    // ② 再命中流向色带（path[j] ↔ sectorLinks[j]），下钻到色带的目标行业
+    for (let j = 0; j < paths.length && j < sectorLinks.length; j++) {
+      if (paths[j].contain(x, y)) {
+        const sid = parseInt(sectorLinks[j].target.split(":")[1], 10);
+        const node = nodes.find((n) => n._sid === sid);
+        if (node) fire(node._sid, node._label);
         return;
       }
     }
