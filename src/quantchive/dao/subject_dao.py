@@ -67,6 +67,22 @@ class SubjectDao:
         ).fetchone()
         return int(row[0]) if row else None
 
+    def search_by_name(self, *, query: str, limit: int = 10) -> list[dict]:
+        """按名称/代码模糊搜主体（agent 名→ID 解析）。名称精确>前缀>包含,代码精确匹配。"""
+        q = query.strip()
+        rows = self._conn.execute(
+            """SELECT subject_id, source_symbol, display_name, asset_class_code, level, subject_kind
+               FROM subject
+               WHERE is_active=1 AND (display_name LIKE ? OR source_symbol LIKE ?)
+               ORDER BY
+                 CASE WHEN display_name=? OR source_symbol=? THEN 0
+                      WHEN display_name LIKE ? THEN 1 ELSE 2 END,
+                 length(display_name)
+               LIMIT ?""",
+            (f"%{q}%", f"%{q}%", q, q, f"{q}%", limit),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
     def get(self, subject_id: int) -> dict | None:
         row = self._conn.execute(
             "SELECT * FROM subject WHERE subject_id=?", (subject_id,)

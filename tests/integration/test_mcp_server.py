@@ -60,11 +60,12 @@ def seeded_db(tmp_path, monkeypatch):
 
 
 def test_tools_registered() -> None:
-    """14 个工具全注册。"""
+    """15 个工具全注册。"""
     tools = asyncio.run(mcp_server.mcp.list_tools())
-    assert len(tools) == 14
+    assert len(tools) == 15
     names = {t.name for t in tools}
     assert "scan_market_stocks" in names and "get_series_range" in names
+    assert "search_subject" in names
 
 
 def test_list_subjects_tool(seeded_db) -> None:
@@ -102,3 +103,9 @@ def test_error_passthrough(seeded_db) -> None:
     res = mcp_server.get_series_range(
         subject_id=999999, start_date="2026-07-01", end_date="2026-07-03", metric="main_net")
     assert "error" in res and res["error"]["code"]
+
+
+def test_search_subject_tool(seeded_db) -> None:
+    """search_subject 按名字找 subject_id。"""
+    res = mcp_server.search_subject("甲")
+    assert isinstance(res, list) and any(r["display_name"] == "甲" for r in res)

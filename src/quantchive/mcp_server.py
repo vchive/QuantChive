@@ -60,10 +60,18 @@ def _dump(result: Any) -> dict:
 
 # ─────────── 寻址 / 自省 ───────────
 
+def search_subject(query: str, limit: int = 10) -> list[dict] | dict:
+    """按名称或代码搜主体，拿 subject_id(名→ID 解析)。查具体股/板块**先用这个**,
+    别用 list_subjects 翻全表。例:search_subject("东山精密") → [{subject_id, display_name, ...}]。"""
+    from quantchive.dao.subject_dao import SubjectDao
+    with _readonly_conn() as conn:
+        return SubjectDao(conn).search_by_name(query=query, limit=limit)
+
+
 def list_subjects(asset_class: str = "a_share", level: str | None = None,
                   subject_kind: str | None = None) -> list[dict] | dict:
-    """列主体清单（下钻寻址:拿 subject_id/代码/名称）。asset_class: a_share|fund_etf；
-    level: market|sector|instrument；subject_kind: stock|industry|concept|etf|... 。所有 agent 的 ID 解析入口。"""
+    """列某类主体全清单(如"全部行业板块")。**找具体某只股/板块请用 search_subject**,
+    此工具返回量大。asset_class: a_share|fund_etf；level: market|sector|instrument。"""
     with _readonly_conn() as conn:
         try:
             refs = _qs(conn).get_subjects(
@@ -227,7 +235,7 @@ def fund_nav(fund_code: str, days: int = 60) -> dict:
 
 # 注册全部 tool（模块级函数,显式注册,便于单测直接调用）
 _TOOLS = [
-    list_subjects, describe_capability, market_overview, rank_sectors,
+    search_subject, list_subjects, describe_capability, market_overview, rank_sectors,
     rank_stocks_in_sector, scan_market_stocks, rank_etf, get_series,
     get_tiers_series, flow_topology, sector_trends, get_series_range,
     get_series_batch, fund_nav,
