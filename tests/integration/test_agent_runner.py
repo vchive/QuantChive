@@ -101,3 +101,50 @@ def test_agent_endpoint_with_injected_runner(monkeypatch) -> None:
     assert r.status_code == 200
     j = r.json()
     assert "760" in j["answer"] and j["provider"] == "fake"
+
+
+# ---- 分层回退 LLM 配置解析 ----
+
+class _S:
+    """最小 settings 桩,只带 LLM 字段。"""
+    def __init__(self, provider="openai", api_key="", base_url="", model="gpt-4o"):
+        self.llm_provider = provider
+        self.llm_api_key = api_key
+        self.llm_base_url = base_url
+        self.llm_model = model
+
+
+def test_resolve_explicit_quantchive_key_wins(monkeypatch) -> None:
+    from quantchive.agent.llm import resolve_llm_config
+    monkeypatch.setenv("OPENAI_API_KEY", "env-openai")
+    p, key, base, model = resolve_llm_config(_S(provider="openai", api_key="explicit"))
+    assert p == "openai" and key == "explicit"   # 显式优先于环境
+
+
+def test_resolve_fallback_openai_env(monkeypatch) -> None:
+    from quantchive.agent.llm import resolve_llm_config
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "env-openai")
+    p, key, base, model = resolve_llm_config(_S(provider="openai", api_key=""))
+    assert p == "openai" and key == "env-openai"
+
+
+def test_resolve_auto_switch_to_anthropic(monkeypatch) -> None:
+    """默认 openai 无 key,但本地有 Anthropic → 自动切 anthropic,复用其 token/base。"""
+    from quantchive.agent.llm import resolve_llm_config
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "env-claude")
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://gw.example/anthropic")
+    p, key, base, model = resolve_llm_config(_S(provider="openai", api_key="", model="gpt-4o"))
+    assert p == "anthropic" and key == "env-claude"
+    assert base == "https://gw.example/anthropic"
+    assert model == "claude-sonnet-5"    # gpt 默认名 → 换 claude 默认
+
+
+def test_resolve_explicit_anthropic_provider(monkeypatch) -> None:
+    """显式 provider=anthropic,key 回退 ANTHROPIC_AUTH_TOKEN。"""
+    from quantchive.agent.llm import resolve_llm_config
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "tok")
+    p, key, base, model = resolve_llm_config(_S(provider="anthropic", api_key="", model="claude-opus-4-8"))
+    assert p == "anthropic" and key == "tok" and model == "claude-opus-4-8"   # 显式 claude 名沿用

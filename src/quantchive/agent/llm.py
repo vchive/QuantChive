@@ -117,12 +117,48 @@ def _neutral_to_anthropic(m: dict) -> dict:
     return {"role": m["role"], "content": m.get("content", "")}
 
 
+def resolve_llm_config(settings) -> tuple[str, str, str, str]:
+    """分层回退解析 (provider, api_key, base_url, model)。
+
+    优先级:显式 QUANTCHIVE_LLM_*(settings) > 标准环境变量(ANTHROPIC_*/OPENAI_*)。
+    默认 provider=openai;若 openai 无 key 但本地有 Anthropic key → 自动切 anthropic
+    (复用本地 ANTHROPIC_AUTH_TOKEN/BASE_URL,省重复配置)。
+    """
+    import os
+
+    def _anthropic_key() -> str:
+        return (settings.llm_api_key or os.environ.get("ANTHROPIC_API_KEY")
+                or os.environ.get("ANTHROPIC_AUTH_TOKEN") or "")
+
+    def _openai_key() -> str:
+        return settings.llm_api_key or os.environ.get("OPENAI_API_KEY") or ""
+
+    provider = settings.llm_provider
+    if provider == "openai" and not _openai_key() and (
+            os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN")):
+        provider = "anthropic"   # 默认 openai 无 key,回退到本地 Anthropic
+
+    if provider == "anthropic":
+        key = _anthropic_key()
+        base = settings.llm_base_url or os.environ.get("ANTHROPIC_BASE_URL") or ""
+        # 模型:显式非 gpt 名沿用;否则给 claude 默认(用户可 QUANTCHIVE_LLM_MODEL 覆盖)
+        model = settings.llm_model
+        if not model or model.startswith("gpt"):
+            model = "claude-sonnet-5"
+    else:
+        provider = "openai"
+        key = _openai_key()
+        base = settings.llm_base_url or os.environ.get("OPENAI_BASE_URL") or ""
+        model = settings.llm_model or "gpt-4o"
+    return provider, key, base, model
+
+
 def make_llm(settings) -> LLMClient:
-    """按 settings 选 provider。未配 api_key 抛 ValueError(端点转成明确错误引导配 key)。"""
-    if not settings.llm_api_key:
-        raise ValueError("未配置 LLM api_key（设 QUANTCHIVE_LLM_API_KEY）")
-    if settings.llm_provider == "anthropic":
-        return AnthropicClient(api_key=settings.llm_api_key, model=settings.llm_model,
-                               base_url=settings.llm_base_url)
-    return OpenAICompatClient(api_key=settings.llm_api_key, model=settings.llm_model,
-                              base_url=settings.llm_base_url)
+    """按分层回退解析 provider/key/base_url/model。无任何 key 抛 ValueError(端点转明确引导)。"""
+    provider, key, base, model = resolve_llm_config(settings)
+    if not key:
+        raise ValueError(
+            "未找到 LLM key（设 QUANTCHIVE_LLM_API_KEY,或本地 OPENAI_API_KEY / ANTHROPIC_AUTH_TOKEN）")
+    if provider == "anthropic":
+        return AnthropicClient(api_key=key, model=model, base_url=base)
+    return OpenAICompatClient(api_key=key, model=model, base_url=base)

@@ -8,7 +8,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 from pydantic import BaseModel
 
-from quantchive.agent.llm import make_llm
+from quantchive.agent.llm import make_llm, resolve_llm_config
 from quantchive.agent.runner import AgentRunner
 from quantchive.core.settings import get_settings
 
@@ -30,9 +30,10 @@ class AskResponse(BaseModel):
 # 测试可 monkeypatch 这个工厂注入 FakeLLMClient
 def _make_runner() -> AgentRunner:
     settings = get_settings()
+    provider, _key, _base, model = resolve_llm_config(settings)  # 显示真实解析结果
     llm = make_llm(settings)
     return AgentRunner(llm, max_steps=settings.llm_max_steps,
-                       provider=settings.llm_provider, model=settings.llm_model)
+                       provider=provider, model=model)
 
 
 @router.post("/ask", response_model=AskResponse)
