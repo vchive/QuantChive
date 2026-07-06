@@ -56,19 +56,22 @@ class FlowTopologyService:
         return [r[0] for r in rows]
 
     def intraday_points(self, *, trade_date: str) -> dict:
-        """某日「天内时点」列表（供天内回放）：盘中分钟/小时快照的 minute_slot 升序。
+        """某日「天内时点」列表（供天内回放）：个股盘中快照的 minute_slot 升序去重。
 
-        近期分钟级、久远小时级由归档层决定（现盘中数据未攒够，多为空或 EOD 单点）。
-        返回 {trade_date, granularity, slots:[...]}。slots 为该日可播的时点（升序）。
+        天内拓扑靠个股分钟净额求和派生，故只取个股(stock)的时点。近期分钟级、久远小时级
+        由归档层决定。返回 {trade_date, granularity, slots:[...]}（升序、唯一）。
         """
         rows = self._conn.execute(
-            """SELECT DISTINCT minute_slot, granularity FROM observation
-               WHERE value_type='intraday_snapshot' AND trade_date=?
-                 AND minute_slot NOT IN ('LATEST') AND main_net_cents IS NOT NULL
-               ORDER BY minute_slot ASC""",
+            """SELECT DISTINCT o.minute_slot FROM observation o
+               JOIN subject s ON s.subject_id = o.subject_id
+               WHERE o.value_type='intraday_snapshot' AND o.trade_date=?
+                 AND o.minute_slot NOT IN ('LATEST') AND o.main_net_cents IS NOT NULL
+                 AND s.subject_kind='stock'
+               ORDER BY o.minute_slot ASC""",
             (trade_date,)).fetchall()
         slots = [r[0] for r in rows]
-        gran = rows[0][1] if rows else "eod"
+        # 粒度：小时冒号后为 '00' 视作小时级，否则分钟级
+        gran = "eod" if not slots else ("hourly" if all(s.endswith(":00") for s in slots) else "1min")
         return {"trade_date": trade_date, "granularity": gran, "slots": slots}
 
     def get_sector_trends(self, *, tier: str = "main", days: int = 20, top_sectors: int = 10):

@@ -74,9 +74,12 @@ def run_loop(
     单 worker（SQLite 单写者约束）；自建线程本地 conn。
     """
     from quantchive.core.db import connect
+    from quantchive.core.trading_calendar import TradingCalendar
 
     clock = clock or SystemClock()
     conn = connect(db_path)
+    # 交易日历必须绑定本线程的 conn（SQLite 连接不可跨线程）——重建避免用到主线程连接
+    scheduler.cal = TradingCalendar(conn)
     _log.info("调度器启动", extra={"context": {"jobs": [j.name for j in scheduler.jobs]}})
     try:
         while not stop_event.is_set():
