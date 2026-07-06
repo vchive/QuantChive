@@ -40,12 +40,13 @@ def get_flow_topology(
     tier: str = Query("main", pattern="^(main|super_large|large|medium|small)$"),
     top_sectors: int = Query(20, ge=1, le=40),
     top_stocks_per_sector: int = Query(10, ge=1, le=50),
+    minute_slot: str | None = Query(None, pattern=r"^\d{2}:\d{2}$"),
     conn=Depends(get_conn),
 ) -> FlowTopologyResult:
-    """资金流向拓扑：大盘→行业（单日快照，四档可切换）。abs 定线宽、红绿定方向。"""
+    """资金流向拓扑：大盘→行业。日终(sina日线)或天内某时点(minute_slot,东财盘中,无gross)。"""
     return FlowTopologyService(conn).get_topology(
         trade_date=trade_date, tier=tier, top_sectors=top_sectors,
-        top_stocks_per_sector=top_stocks_per_sector)
+        top_stocks_per_sector=top_stocks_per_sector, minute_slot=minute_slot)
 
 
 @topology_router.get("/topology/sector/{sector_id}", response_model=FlowTopologyResult)

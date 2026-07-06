@@ -47,11 +47,19 @@ class FlowTopologyService:
         self._source = source_code
 
     def available_dates(self, *, limit: int = 60) -> list[str]:
-        """可选交易日（有 sina 日线四档的日期，降序）。供历史日期选择器。"""
+        """可选交易日：有 sina 日线四档 或 有盘中个股快照 的日期（降序）。
+
+        当天盘中(还没收盘日线)也应可选——供天内回放。"""
         rows = self._conn.execute(
-            """SELECT DISTINCT trade_date FROM observation
-               WHERE source_code=? AND value_type='daily_final' AND main_net_cents IS NOT NULL
-               ORDER BY trade_date DESC LIMIT ?""",
+            """SELECT trade_date FROM (
+                   SELECT DISTINCT trade_date FROM observation
+                   WHERE source_code=? AND value_type='daily_final' AND main_net_cents IS NOT NULL
+                   UNION
+                   SELECT DISTINCT o.trade_date FROM observation o
+                   JOIN subject s ON s.subject_id=o.subject_id
+                   WHERE o.value_type='intraday_snapshot' AND s.subject_kind='stock'
+                     AND o.minute_slot!='LATEST' AND o.main_net_cents IS NOT NULL
+               ) ORDER BY trade_date DESC LIMIT ?""",
             (self._source, limit)).fetchall()
         return [r[0] for r in rows]
 
@@ -121,26 +129,48 @@ class FlowTopologyService:
     def get_topology(
         self, *, trade_date: str | None = None, tier: str = "main",
         top_sectors: int = 20, top_stocks_per_sector: int = 10,
+        minute_slot: str | None = None,
     ) -> FlowTopologyResult:
         if tier not in _TIER_COL:
             raise NoDataForDate(f"未知档位 {tier}", detail={"tier": tier})
         net_col = _TIER_COL[tier]
         gross_col = _TIER_GROSS.get(tier)   # main 无独立 gross
 
-        if trade_date is None:
-            row = self._conn.execute(
-                "SELECT MAX(trade_date) FROM observation WHERE source_code=? AND value_type='daily_final'",
-                (self._source,)).fetchone()
-            trade_date = row[0] if row else None
-        if not trade_date:
-            raise NoDataForDate("无 sina_flow 日线数据（需回填）", detail={})
+        # 天内某时点：读盘中 intraday_snapshot（东财，无 gross）；否则日终 sina 日线
+        if minute_slot:
+            gross_col = None   # 盘中无 gross
+            rows = self._obs.stock_rows_for(
+                trade_date=trade_date, value_type=ValueType.INTRADAY_SNAPSHOT,
+                minute_slot=minute_slot, source_code="eastmoney")
+            captured, src, stype = minute_slot, "eastmoney", SourceType.INTRADAY_SNAPSHOT
+        else:
+            if trade_date is None:
+                row = self._conn.execute(
+                    "SELECT MAX(trade_date) FROM observation WHERE source_code=? AND value_type='daily_final'",
+                    (self._source,)).fetchone()
+                trade_date = row[0] if row else None
+            if not trade_date:
+                raise NoDataForDate("无 sina_flow 日线数据（需回填）", detail={})
+            rows = self._obs.stock_rows_for(
+                trade_date=trade_date, value_type=ValueType.DAILY_FINAL,
+                minute_slot="EOD", source_code=self._source)
+            captured, src, stype = "EOD", self._source, SourceType.DAILY_FINAL
+            # 当天盘中(还没收盘日线) → 退化到最新盘中时点（东财，无 gross）
+            if not any(getattr(r, net_col) is not None for r in rows):
+                pts = self.intraday_points(trade_date=trade_date)
+                if pts["slots"]:
+                    latest = pts["slots"][-1]
+                    gross_col = None
+                    rows = self._obs.stock_rows_for(
+                        trade_date=trade_date, value_type=ValueType.INTRADAY_SNAPSHOT,
+                        minute_slot=latest, source_code="eastmoney")
+                    captured, src, stype = latest, "eastmoney", SourceType.INTRADAY_SNAPSHOT
 
-        rows = self._obs.stock_rows_for(
-            trade_date=trade_date, value_type=ValueType.DAILY_FINAL,
-            minute_slot="EOD", source_code=self._source)
         valid = [r for r in rows if getattr(r, net_col) is not None]
         if not valid:
-            raise NoDataForDate(f"{trade_date} 无个股档位数据", detail={"trade_date": trade_date})
+            raise NoDataForDate(
+                f"{trade_date} {minute_slot or 'EOD'} 无个股档位数据",
+                detail={"trade_date": trade_date, "minute_slot": minute_slot})
 
         expected = self._conn.execute(
             "SELECT COUNT(*) FROM subject WHERE subject_kind='stock'").fetchone()[0]
@@ -192,8 +222,8 @@ class FlowTopologyService:
             links.append(self._link("market", "other:market", rest_net))
 
         prov = DataProvenance(
-            trade_date=trade_date, source_type=SourceType.DAILY_FINAL,
-            source_id=self._source, captured_at="EOD", is_stale=False)
+            trade_date=trade_date, source_type=stype,
+            source_id=src, captured_at=captured, is_stale=False)
         return FlowTopologyResult(
             trade_date=trade_date, tier=tier, provenance=prov,
             coverage_pct=f"{coverage * 100:.1f}", constituent_count=len(valid),

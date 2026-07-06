@@ -322,10 +322,23 @@ function buildDayPlaybackBar(dayPoints, tier, mode, tradeDate) {
   bar.appendChild(btn); bar.appendChild(slider); bar.appendChild(label);
   return bar;
 }
-// 播放某日某时点的拓扑（下周一接盘中数据；现无逐时点，退化为当日 EOD）
-function viewTopologyAtSlot(tier, mode, tradeDate, _slot) {
-  // TODO(下周一)：按 slot 取当日该时刻拓扑。现无逐时点数据 → 用当日 EOD 拓扑占位。
-  viewTopology(tier, mode, tradeDate);
+// 播放某日某时点的拓扑：按 minute_slot 取盘中该时刻拓扑，只重绘图表区（保留播放条不打断）
+async function viewTopologyAtSlot(tier, mode, tradeDate, slot) {
+  const box = document.querySelector(".flow-chart");
+  if (!box) return;
+  // 天内只支持桑基/排行/矩形（旭日用 tree 端点，暂按桑基降级）；盘中无 gross
+  try {
+    const data = await api(`/api/flow/topology?tier=${tier}&top_sectors=20&trade_date=${tradeDate}&minute_slot=${slot}`);
+    box.innerHTML = "";
+    const onSector = (sid, sn) => { stopTopoPlay(); logClick("下钻行业", sn); push(sn + " 成分", () => viewSectorTreemap(sid, sn, tier, tradeDate)); };
+    if (mode === "ranking") renderSectorRanking(box, data, onSector);
+    else renderFlowSankey(box, data, onSector);   // 其余模式盘中降级为桑基
+    const sub = document.querySelector(".sub");
+    if (sub) sub.textContent = `${tradeDate} ${slot} · 盘中快照(净额,无流入流出) · 覆盖 ${data.coverage_pct}%`;
+  } catch (e) {
+    box.innerHTML = "";
+    box.appendChild(el("div", "hint", `${e.code || ""}: ${e.message || "该时点无数据"}`));
+  }
 }
 
 // ---- 跨天回放（一帧一天，看资金流向多日演变；数据现成，可用）----
