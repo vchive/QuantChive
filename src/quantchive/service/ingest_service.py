@@ -714,6 +714,7 @@ def backfill_flow_history(
     caliber: Caliber = Caliber.EASTMONEY,
     limit: int | None = None,
     sleep_sec: float = 0.3,
+    history_rows: int = 1500,
     clock: "Clock | None" = None,
     progress: "object | None" = None,
 ) -> dict:
@@ -721,6 +722,7 @@ def backfill_flow_history(
 
     独立于东财——东财 fflow 限流时仍可灌资金流历史。写 daily_final 五档观测。
     sleep_sec 主体间节流（新浪虽宽松，仍礼貌节流防封）。幂等、单主体隔离、无前视。
+    history_rows：单股逐股接口取多少行（num）——800≈3年、1500≈6年、5000≈16年(到顶)。
     """
     import time as _time
     from datetime import date as _date, datetime as _dt, timedelta, timezone as _tz
@@ -765,7 +767,7 @@ def backfill_flow_history(
         span_hi = max(g[1] for g in gaps)
         bars = source.fetch_flow_history(
             symbol=s["source_symbol"], exchange=s.get("exchange"),
-            start_date=span_lo, end_date=span_hi)
+            start_date=span_lo, end_date=span_hi, max_rows=history_rows)
         for o in bars:
             if not o.trade_date:
                 continue
