@@ -59,6 +59,7 @@ class FlowTopologyService:
                    JOIN subject s ON s.subject_id=o.subject_id
                    WHERE o.value_type='intraday_snapshot' AND s.subject_kind='stock'
                      AND o.minute_slot!='LATEST' AND o.main_net_cents IS NOT NULL
+                     AND o.minute_slot >= '09:30' AND o.minute_slot <= '15:00'
                ) ORDER BY trade_date DESC LIMIT ?""",
             (self._source, limit)).fetchall()
         return [r[0] for r in rows]
@@ -66,8 +67,9 @@ class FlowTopologyService:
     def intraday_points(self, *, trade_date: str) -> dict:
         """某日「天内时点」列表（供天内回放）：个股盘中快照的 minute_slot 升序去重。
 
-        天内拓扑靠个股分钟净额求和派生，故只取个股(stock)的时点。近期分钟级、久远小时级
-        由归档层决定。返回 {trade_date, granularity, slots:[...]}（升序、唯一）。
+        天内拓扑靠个股分钟净额求和派生，故只取个股(stock)的时点。只认盘中时段
+        (09:30-15:00) 的 slot——非交易时段的误采数据(如 00:42)不泄漏到 UI。
+        返回 {trade_date, granularity, slots:[...]}（升序、唯一）。
         """
         rows = self._conn.execute(
             """SELECT DISTINCT o.minute_slot FROM observation o
@@ -75,6 +77,7 @@ class FlowTopologyService:
                WHERE o.value_type='intraday_snapshot' AND o.trade_date=?
                  AND o.minute_slot NOT IN ('LATEST') AND o.main_net_cents IS NOT NULL
                  AND s.subject_kind='stock'
+                 AND o.minute_slot >= '09:30' AND o.minute_slot <= '15:00'
                ORDER BY o.minute_slot ASC""",
             (trade_date,)).fetchall()
         slots = [r[0] for r in rows]
