@@ -247,14 +247,36 @@ class ObservationDao:
     def series_daily(
         self, *, subject_id: int, days: int = 30,
         sources: list[str] | None = None, nonnull_column: str | None = None,
+        start_date: str | None = None, end_date: str | None = None,
     ) -> list[ObservationRow]:
         """单主体跨交易日的日线序列（daily_final），按 trade_date 升序。历史回填读此。
 
         取最近 days 个交易日的 EOD 日终点——盘中快照攒不出的历史深度由日线回填提供。
         多源解析（spec004）：sources 给定源优先级 → 逐 trade_date 取首个「该指标列非空」的
         权威源行（窗口函数 ROW_NUMBER 按源优先级排序）。sources=None 则不限源（兼容旧行为）。
+
+        区间模式（spec: agent 地基）：给定 start_date/end_date 则按 trade_date BETWEEN 取,
+        丢弃 LIMIT days（回测取任意历史区间，绕最近N天限制）。end_date 天然是 as-of 上界。
         """
+        ranged = start_date is not None or end_date is not None
+        # 区间 WHERE 片段 + 参数（升序，无 LIMIT）
+        range_sql = ""
+        range_params: list = []
+        if start_date is not None:
+            range_sql += " AND o.trade_date >= ?"; range_params.append(start_date)
+        if end_date is not None:
+            range_sql += " AND o.trade_date <= ?"; range_params.append(end_date)
+
         if not sources:
+            if ranged:
+                rows = self._conn.execute(
+                    f"""SELECT {_OBS_COLS}
+                       FROM observation o JOIN subject s ON s.subject_id = o.subject_id
+                       WHERE o.subject_id=? AND o.value_type='daily_final'{range_sql}
+                       ORDER BY o.trade_date ASC""",
+                    (subject_id, *range_params),
+                ).fetchall()
+                return [ObservationRow(*r) for r in rows]
             rows = self._conn.execute(
                 f"""SELECT * FROM (
                        SELECT {_OBS_COLS}
@@ -271,6 +293,23 @@ class ObservationDao:
         case_rank = " ".join(
             f"WHEN o.source_code='{sc}' THEN {i}" for i, sc in enumerate(sources))
         col = nonnull_column or "main_net_cents"
+        if ranged:
+            rows = self._conn.execute(
+                f"""SELECT * FROM (
+                       SELECT {_OBS_COLS},
+                              ROW_NUMBER() OVER (
+                                PARTITION BY o.trade_date
+                                ORDER BY (CASE WHEN o.{col} IS NULL THEN 1 ELSE 0 END),
+                                         (CASE {case_rank} ELSE 999 END)) AS _rn
+                       FROM observation o JOIN subject s ON s.subject_id = o.subject_id
+                       WHERE o.subject_id=? AND o.value_type='daily_final'
+                         AND o.source_code IN ({placeholders}){range_sql}
+                   ) WHERE _rn=1
+                   ORDER BY trade_date ASC""",
+                (subject_id, *sources, *range_params),
+            ).fetchall()
+            return [ObservationRow(*r[:-1]) for r in rows]
+
         rows = self._conn.execute(
             f"""SELECT * FROM (
                    SELECT {_OBS_COLS},
@@ -288,6 +327,39 @@ class ObservationDao:
         # 去掉尾部 _rn 列，升序返回
         ordered = sorted((ObservationRow(*r[:-1]) for r in rows), key=lambda x: x.trade_date)
         return ordered
+
+    def series_daily_range_batch(
+        self, *, subject_ids: list[int], start_date: str, end_date: str,
+        sources: list[str], nonnull_column: str | None = None,
+    ) -> list[ObservationRow]:
+        """多主体日线区间批量（回测取数）。一条 SQL，(subject_id, trade_date) 逐点多源解析。
+
+        窗口函数 PARTITION BY (subject_id, trade_date) 各自逐点取权威源；trade_date BETWEEN
+        区间；按 subject_id, trade_date 升序返回（调用方自行分组）。end_date 为 as-of 上界。
+        """
+        if not subject_ids or not sources:
+            return []
+        sph = ",".join("?" * len(subject_ids))
+        srcph = ",".join("?" * len(sources))
+        case_rank = " ".join(
+            f"WHEN o.source_code='{sc}' THEN {i}" for i, sc in enumerate(sources))
+        col = nonnull_column or "main_net_cents"
+        rows = self._conn.execute(
+            f"""SELECT * FROM (
+                   SELECT {_OBS_COLS},
+                          ROW_NUMBER() OVER (
+                            PARTITION BY o.subject_id, o.trade_date
+                            ORDER BY (CASE WHEN o.{col} IS NULL THEN 1 ELSE 0 END),
+                                     (CASE {case_rank} ELSE 999 END)) AS _rn
+                   FROM observation o JOIN subject s ON s.subject_id = o.subject_id
+                   WHERE o.subject_id IN ({sph}) AND o.value_type='daily_final'
+                     AND o.source_code IN ({srcph})
+                     AND o.trade_date >= ? AND o.trade_date <= ?
+               ) WHERE _rn=1
+               ORDER BY subject_id ASC, trade_date ASC""",
+            (*subject_ids, *sources, start_date, end_date),
+        ).fetchall()
+        return [ObservationRow(*r[:-1]) for r in rows]
 
     def tiers_rows_daily(
         self, *, subject_id: int, days: int, sources: list[str],

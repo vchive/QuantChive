@@ -32,6 +32,7 @@ from quantchive.models.enums import (
 )
 from quantchive.service.capability_registry import CapabilityRegistry
 from quantchive.service.dto import (
+    BatchSeriesResult,
     DataProvenance,
     HealthResult,
     MarketOverviewResult,
@@ -318,6 +319,63 @@ class QueryService:
             has_five_tier=has_five_tier, full=full, top_n=top_n,
         )
 
+    def scan_market_stocks(
+        self, *, sort_by: SortField = SortField.MAIN_NET, top_n: int = 50,
+        trade_date: str | None = None, as_of: str | None = None,
+    ) -> RankingResult:
+        """全市场个股平铺横截面排行（跨行业统一榜，分析型 agent 用）。
+
+        与 get_stocks_in_sector 的区别：主体集=全部个股（非某板块成分）。5535 股不全量物化——
+        bipolar(如 main_net) 调 ranking_snapshot 两次(desc 流入 / asc 流出)各取 top_n，
+        unipolar(price/volume) 单次。trade_date/as_of 为横截面时点（无前视）。
+        """
+        asset_class, stock_kind = AssetClass.A_SHARE, SubjectKind.STOCK
+        if not self._registry.is_sort_allowed(
+                asset_class=asset_class, subject_kind=stock_kind, sort_by=sort_by):
+            raise UnsupportedMetric(
+                f"个股不支持排序字段 {sort_by.value}",
+                detail={"available": [f.value for f in self._registry.available_sort_fields(
+                    asset_class=asset_class, subject_kind=stock_kind)]})
+        td = trade_date or as_of or self._resolve_obs_trade_date(
+            asset_class, SubjectLevel.INSTRUMENT)
+        if td is None:
+            raise NoDataForDate("无任何已采集个股观测", detail={})
+        today = self._cal.latest_trading_day(self._cal_today()) or td
+        is_history = as_of is not None and as_of < today
+        ids = [s["subject_id"] for s in self._subject.list_by(
+            asset_class=asset_class, level=SubjectLevel.INSTRUMENT, subject_kind=stock_kind)]
+        if not ids:
+            raise NoDataForDate("无个股主体", detail={})
+        if is_history:
+            value_type, slot = ValueType.DAILY_FINAL, "EOD"
+            src = resolve_metric_sources(sort_by)[0]
+        else:
+            value_type, slot = ValueType.INTRADAY_LATEST, "LATEST"
+            src = REALTIME_SOURCE
+        mode = self._registry.ranking_mode(sort_by)
+        has_five_tier = self._registry.has_five_tier(
+            asset_class=asset_class, subject_kind=stock_kind)
+        prov = DataProvenance(
+            trade_date=td, source_type=SourceType(value_type.value),
+            source_id=self._source_id, captured_at=slot, is_stale=td < today)
+        kw = dict(asset_class=asset_class, level=SubjectLevel.INSTRUMENT,
+                  subject_kind=stock_kind, sort_by=sort_by, mode=mode, provenance=prov,
+                  total_subjects=len(ids), has_five_tier=has_five_tier)
+
+        def _snap(descending: bool):
+            rows = self._obs.ranking_snapshot(
+                subject_ids=ids, trade_date=td, value_type=value_type, minute_slot=slot,
+                sort_by=sort_by, top_n=top_n, descending=descending, source_code=src)
+            return [_obs_to_item(r) for r in rows]
+
+        if mode == "unipolar":
+            return RankingResult(ranked_items=_snap(True), **kw)
+        # bipolar：两端各取 top_n，按符号切正负榜（各只物化 top_n，不全量）
+        sval = _OBS_SORT_ATTR[sort_by]
+        inflow = [it for it in _snap(True) if sval(it) is not None and sval(it) > 0]
+        outflow = [it for it in _snap(False) if sval(it) is not None and sval(it) < 0]
+        return RankingResult(top_inflow=inflow, top_outflow=outflow, **kw)
+
     def get_etf_ranking(
         self, *, sort_by: SortField = SortField.CHANGE_PCT, top_n: int = 20,
         full: bool = False, trade_date: str | None = None,
@@ -493,6 +551,85 @@ class QueryService:
             subject_id=subject_id, source_symbol=subject["source_symbol"],
             display_name=subject["display_name"], metric=metric.value, trade_date=last_td,
             granularity="daily", provenance=prov, points=points, gap_count=gap_count)
+
+    def _build_daily_result(
+        self, subject_id: int, subject: dict, metric: SortField, rows,
+    ) -> SubjectSeriesResult:
+        """rows(日线,升序) → SubjectSeriesResult。区间/批量共用组装（同 _daily_series）。"""
+        points: list[SeriesPoint] = []
+        gap_count = 0
+        for r in rows:
+            value = _metric_value(r, metric)
+            if value is None:
+                gap_count += 1
+            points.append(SeriesPoint(
+                ts=r.trade_date, value=value, granularity="daily",
+                source_type=SourceType(r.value_type)))
+        last_td = rows[-1].trade_date if rows else ""
+        today = self._cal.latest_trading_day(self._cal_today()) or last_td
+        prov = DataProvenance(
+            trade_date=last_td, source_type=SourceType("daily_final"),
+            source_id=self._source_id, captured_at=last_td, is_stale=bool(last_td) and last_td < today)
+        return SubjectSeriesResult(
+            subject_id=subject_id, source_symbol=subject["source_symbol"],
+            display_name=subject["display_name"], metric=metric.value, trade_date=last_td,
+            granularity="daily", provenance=prov, points=points, gap_count=gap_count)
+
+    def get_subject_series_range(
+        self, *, subject_id: int, metric: SortField = SortField.MAIN_NET,
+        start_date: str, end_date: str,
+    ) -> SubjectSeriesResult:
+        """单主体日线区间取数（回测/策略型 agent 用）。按 [start,end] 取任意历史区间，
+        不受实时保留窗限制（该窗为分钟数据设计，日线历史不该受限）。end_date 为 as-of 上界。"""
+        from quantchive.datasource.metric_source import (
+            metric_nonnull_column,
+            resolve_metric_sources,
+        )
+        subject = self._subject.get(subject_id)
+        if subject is None:
+            raise SubjectNotFound(
+                f"主体 {subject_id} 不存在", detail={"subject_id": subject_id})
+        rows = self._obs.series_daily(
+            subject_id=subject_id, sources=resolve_metric_sources(metric),
+            nonnull_column=metric_nonnull_column(metric),
+            start_date=start_date, end_date=end_date)
+        if not rows:
+            raise NoDataForDate(
+                f"主体 {subject['display_name']} 在 [{start_date},{end_date}] 无日线历史",
+                detail={"subject_id": subject_id, "start_date": start_date, "end_date": end_date})
+        return self._build_daily_result(subject_id, subject, metric, rows)
+
+    def get_subjects_series_batch(
+        self, *, subject_ids: list[int], metric: SortField = SortField.MAIN_NET,
+        start_date: str, end_date: str,
+    ) -> "BatchSeriesResult":
+        """多主体日线区间批量（回测组合取数，减少往返）。一条 SQL 取全部，按 subject_id 分组。"""
+        from quantchive.datasource.metric_source import (
+            metric_nonnull_column,
+            resolve_metric_sources,
+        )
+        if not subject_ids:
+            return BatchSeriesResult(metric=metric.value, start_date=start_date,
+                                     end_date=end_date, series=[])
+        rows = self._obs.series_daily_range_batch(
+            subject_ids=subject_ids, start_date=start_date, end_date=end_date,
+            sources=resolve_metric_sources(metric),
+            nonnull_column=metric_nonnull_column(metric))
+        # 按 subject_id 分组（rows 已按 subject_id, trade_date 升序）
+        by_sid: dict[int, list] = {}
+        for r in rows:
+            by_sid.setdefault(r.subject_id, []).append(r)
+        series: list[SubjectSeriesResult] = []
+        for sid in subject_ids:
+            srows = by_sid.get(sid)
+            if not srows:
+                continue   # 该主体区间内无数据，跳过（不造假空点）
+            subject = self._subject.get(sid)
+            if subject is None:
+                continue
+            series.append(self._build_daily_result(sid, subject, metric, srows))
+        return BatchSeriesResult(metric=metric.value, start_date=start_date,
+                                 end_date=end_date, series=series)
 
     def get_market_overview(
         self, *, asset_class: AssetClass = AssetClass.A_SHARE,

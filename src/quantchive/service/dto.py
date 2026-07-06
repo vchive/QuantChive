@@ -278,3 +278,12 @@ class SectorTrendsResult(_Base):
     dates: list[str]
     provenance: DataProvenance
     series: list[SectorTrendSeries]
+
+
+class BatchSeriesResult(_Base):
+    """多主体日线区间批量结果（回测取数）。series 内每主体一个 SubjectSeriesResult。"""
+
+    metric: str
+    start_date: str
+    end_date: str
+    series: list[SubjectSeriesResult]
