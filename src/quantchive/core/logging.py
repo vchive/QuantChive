@@ -28,11 +28,11 @@ class _JsonFormatter(logging.Formatter):
 _configured = False
 
 
-def configure_logging(level: int = logging.INFO) -> None:
+def configure_logging(level: int = logging.INFO, stream: Any = None) -> None:
     global _configured
     if _configured:
         return
-    handler = logging.StreamHandler(sys.stdout)
+    handler = logging.StreamHandler(stream or sys.stdout)
     handler.setFormatter(_JsonFormatter())
     root = logging.getLogger()
     root.handlers.clear()
