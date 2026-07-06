@@ -41,6 +41,9 @@ class Settings(BaseSettings):
     # 大盘求和覆盖率门禁（D2）。默认 0.95；停牌股多的交易日（无流可求和）可下调。
     # 注意：停牌股贡献 0 流入，求和本身完整；门禁主要防"抓取失败"漏计，非停牌。
     market_coverage_threshold: float = Field(default=0.95, gt=0, le=1)
+    # 盘中实时大盘门禁：盘中总有停牌/无成交股（东财实时不返），92%+ 已很高，
+    # 用较松阈值让盘中大盘能正常显示；历史日线仍走上面的 0.95 严格门禁。
+    market_coverage_threshold_intraday: float = Field(default=0.90, gt=0, le=1)
 
     # ---- spec003 数据层韧性（限流治理 / 缓存 / 回填）----
     # 翻页页间随机节流区间（秒）——防高频翻页触发东财 IP 限流（research D1）

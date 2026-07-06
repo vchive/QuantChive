@@ -73,7 +73,7 @@ def run_target(conn: sqlite3.Connection, target: str) -> object:
         return collect_stock_observations_once(
             source=EastMoneyStockSource(http_get=default_http_get()), observation_dao=ObservationDao(conn),
             run_dao=RunDao(conn), subject_dao=SubjectDao(conn),
-            aggregator=MarketAggregator(conn, threshold=settings.market_coverage_threshold),
+            aggregator=MarketAggregator(conn, threshold=settings.market_coverage_threshold_intraday),
             adapter_version="push2delay-stock-v1")
     if target == "etf":
         return collect_etf_observations_once(
