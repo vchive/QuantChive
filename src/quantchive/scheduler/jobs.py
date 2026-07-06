@@ -19,7 +19,7 @@ from quantchive.core.settings import Settings
 from quantchive.core.trading_calendar import (
     SHANGHAI_TZ,
     TradingCalendar,
-    in_session_window,
+    is_trading_time,
 )
 from quantchive.dao.observation_dao import ObservationDao
 from quantchive.dao.run_dao import RunDao
@@ -84,9 +84,9 @@ def run_target(conn: sqlite3.Connection, target: str) -> object:
 
 
 def is_collection_time(now: datetime, cal: TradingCalendar) -> bool:
-    """是否交易日的盘中时段（09:30-15:00，含午休停采由 JOB 内部快照跳过）。"""
+    """是否交易日的真实交易时段（09:30-11:30 / 13:00-15:00，排除午休）。"""
     local = now.astimezone(SHANGHAI_TZ)
-    return cal.is_trading_day(local.date().isoformat()) and in_session_window(now)
+    return cal.is_trading_day(local.date().isoformat()) and is_trading_time(now)
 
 
 # 盘后触发时刻（Asia/Shanghai）
