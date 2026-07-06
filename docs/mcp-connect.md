@@ -79,3 +79,31 @@ uv run quantchive-mcp        # stdio,等 JSON-RPC 输入
 
 - `mcp[cli]` pin `<2`(v2 类改名 FastMCP→MCPServer 约 2026-07 落地,pin 保命)。
 - stdio 日志走 stderr(stdout 留给 JSON-RPC 协议)。
+
+## 接入 Hermes Agent（对比自建 agent 用)
+
+Hermes(Nous Research)原生支持 MCP。编辑 `~/.hermes/config.yaml`,在 `mcp_servers` 加:
+
+```yaml
+mcp_servers:
+  quantchive:
+    type: stdio
+    command: uv
+    args: ["run", "quantchive-mcp"]
+    cwd: /Users/liminghan01/Documents/quant/QuantChive
+```
+
+Hermes 启动后自动发现 QuantChive 的 14 个工具。用同一问题(如"今天全市场主力净流入前5")
+分别问 Hermes 与 QuantChive 自带的「智能助手」面板,横向对比推理质量/工具调用/答案准确度。
+
+## 两种 agent 的定位
+
+| | QuantChive 自带助手(前端面板) | Hermes(外部,MCP 接入) |
+|---|---|---|
+| 位置 | 集成在 QuantChive 网页「智能助手」tab | Hermes 自己的界面/终端/消息应用 |
+| 循环 | ReAct(思考→工具→观察→答),轨迹前端可见 | Hermes 自己的 ReAct + 持久记忆 + 自改进技能 |
+| 工具 | 直接调 mcp_server._TOOLS(in-process) | 经 MCP stdio 调同一批工具 |
+| 用途 | 轻量、可观测、和产品一体 | 高级、持久记忆、多步自主 |
+| 代码 | 自建(agent/llm.py + runner.py) | 零代码,仅 config 一行 |
+
+两者共享同一套工具定义(mcp_server 单一来源),数据/语义完全一致,只是"大脑"不同——正好对比。

@@ -569,6 +569,7 @@ function selectAsset(asset) {
   stack.length = 0;
   if (asset === "a_share") push("大盘", viewMarket);
   else if (asset === "topology") push("资金流向", () => viewTopology("main"));
+  else if (asset === "agent") push("智能助手", renderAgentPanel);
   else push("ETF", viewEtf);
 }
 

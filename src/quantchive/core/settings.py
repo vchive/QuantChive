@@ -67,6 +67,13 @@ class Settings(BaseSettings):
     # 盘中分钟归档：三层保留（分钟7天已由 downsample_after_days，此为总窗）
     intraday_archive_enabled: bool = Field(default=False)  # 调度器盘中归档开关
 
+    # ---- QuantChive agent LLM（provider 无关：openai 兼容 / anthropic）----
+    llm_provider: str = Field(default="openai")          # openai | anthropic
+    llm_api_key: str = Field(default="")                 # 空=未配置,agent 端点报错引导
+    llm_base_url: str = Field(default="")                # 空=用 provider 默认；可指向兼容网关
+    llm_model: str = Field(default="gpt-4o")             # 具体模型名(deepseek/claude/... 由用户配)
+    llm_max_steps: int = Field(default=6, ge=1, le=20)   # ReAct 最大轮数(防失控)
+
 
 
     # 采集间隔（秒）—— spec001 兼容保留
