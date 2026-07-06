@@ -280,10 +280,25 @@ async function viewSeries(subjectId, name, metric = "main_net", gran = "daily", 
 // 现盘中分钟数据未攒够（下周一盘中调度器跑满一天后到位）。届时 slots 就是当日时点，
 // seek 按 slot 取当日某时刻拓扑；框架/UI/播放逻辑不变，只接数据。
 const TOPO_PLAY = { timer: null, playing: false };
+// 实时自动刷新：看今天且盘中时段时，每 30s 拉最新时点、拓扑更新到"此刻"
+const TOPO_LIVE = { timer: null, on: false };
+function stopTopoLive() {
+  if (TOPO_LIVE.timer) { clearInterval(TOPO_LIVE.timer); TOPO_LIVE.timer = null; }
+  TOPO_LIVE.on = false;
+}
+function isTodayTradingNow(tradeDate) {
+  const now = new Date();
+  const y = now.getFullYear(), m = String(now.getMonth() + 1).padStart(2, "0"), d = String(now.getDate()).padStart(2, "0");
+  const today = `${y}-${m}-${d}`;
+  if (tradeDate && tradeDate !== today) return false;   // 看的不是今天
+  const hm = now.getHours() * 100 + now.getMinutes();
+  return (hm >= 930 && hm <= 1130) || (hm >= 1300 && hm <= 1500);   // A股盘中
+}
 function stopTopoPlay() {
   if (TOPO_PLAY.timer) { clearInterval(TOPO_PLAY.timer); TOPO_PLAY.timer = null; }
   TOPO_PLAY.playing = false;
   if (typeof stopDayCross === "function") stopDayCross();   // 同时停跨天回放
+  stopTopoLive();   // 下钻/切换时也停实时刷新
 }
 async function fetchIntradayPoints(tradeDate) {
   if (!tradeDate) return { slots: [], granularity: "eod" };
@@ -496,6 +511,23 @@ async function viewTopology(tier = "main", mode = "sankey", tradeDate = "") {
     // 只有 EOD 一个点时显示占位提示，不空跑。
     const dayPoints = await fetchIntradayPoints(tradeDate || data.trade_date);
     v.appendChild(buildDayPlaybackBar(dayPoints, tier, mode, tradeDate || data.trade_date));
+    // 实时自动刷新：看今天且盘中 → 每 30s 拉最新时点、拓扑更新到此刻
+    stopTopoLive();
+    const liveDate = tradeDate || data.trade_date;
+    if (isTodayTradingNow(tradeDate) && (mode === "sankey" || mode === "ranking")) {
+      const liveBadge = el("span", "live-badge", "🔴 实时（每30秒自动刷新到此刻）");
+      v.appendChild(liveBadge);
+      TOPO_LIVE.on = true;
+      TOPO_LIVE.timer = setInterval(async () => {
+        if (TOPO_PLAY.playing || TOPO_DAYPLAY.playing) return;   // 手动回放时不打断
+        const pts = await fetchIntradayPoints(liveDate);
+        if (pts.slots && pts.slots.length) {
+          const latest = pts.slots[pts.slots.length - 1];
+          viewTopologyAtSlot(tier, mode, liveDate, latest);   // 只重绘图表区到最新时刻
+          liveBadge.textContent = `🔴 实时 · 已更新至 ${latest}`;
+        }
+      }, 30000);
+    }
     const hint = {
       sankey: "点击行业看成分股 · 线宽=资金量 · 红净流入/绿净流出",
       sunburst: "内圈行业外圈个股 · 点个股看博弈 · 红净流入/绿净流出",
@@ -532,6 +564,7 @@ async function viewSectorTreemap(sectorId, sectorName, tier, tradeDate = "") {
 function selectAsset(asset) {
   ASSET = asset;
   stopTopoPlay();   // 切 tab 停回放
+  stopTopoLive();   // 切 tab 停实时刷新
   document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.asset === asset));
   stack.length = 0;
   if (asset === "a_share") push("大盘", viewMarket);

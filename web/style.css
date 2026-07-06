@@ -303,3 +303,6 @@ footer { display: flex; align-items: flex-start; gap: var(--sp-4); }
 
 /* 回放条前缀标签 */
 .play-cap { font-size: var(--fs-cap); color: var(--muted); background: var(--panel-2); padding: 3px 8px; border-radius: var(--r-sm); flex-shrink: 0; }
+
+/* 实时刷新角标 */
+.live-badge { display: inline-block; margin: var(--sp-2) 0; font-size: var(--fs-label); color: var(--pos); font-family: var(--font-num); font-weight: var(--fw-med); }
