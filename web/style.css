@@ -333,3 +333,7 @@ footer { display: flex; align-items: flex-start; gap: var(--sp-4); }
 .agent-tips { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
 .agent-tip { padding: 6px 12px; border-radius: var(--r-pill); border: 1px solid var(--border); background: var(--panel); color: var(--muted); cursor: pointer; font-size: var(--fs-label); }
 .agent-tip:hover { border-color: var(--accent); color: var(--text); }
+
+/* 跨源校验角标 */
+.vok { color: var(--neg); }
+.vdiv { color: var(--amber); }

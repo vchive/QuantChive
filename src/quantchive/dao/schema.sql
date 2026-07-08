@@ -197,3 +197,23 @@ CREATE TABLE IF NOT EXISTS coverage_range (
 );
 CREATE INDEX IF NOT EXISTS idx_coverage_lookup
     ON coverage_range (subject_id, metric_kind, granularity);
+
+-- ============================================================================
+-- spec005 跨源校验审计（T030）：新浪 vs 百度当日四档跨源比对结果（只标记不改数，宪章V）
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS cross_source_check (
+    check_id      INTEGER PRIMARY KEY,
+    subject_id    INTEGER NOT NULL REFERENCES subject(subject_id),
+    trade_date    TEXT NOT NULL,
+    tier          TEXT NOT NULL,          -- 'super_large'|'large'|'medium'|'small'|'main'
+    source_a      TEXT NOT NULL,          -- 'sina_flow'
+    source_b      TEXT NOT NULL,          -- 'baidu_flow'
+    net_a_cents   INTEGER,
+    net_b_cents   INTEGER,
+    verdict       TEXT NOT NULL,          -- 'ok' | 'divergence'
+    reason        TEXT,
+    created_at    TEXT NOT NULL,
+    UNIQUE (subject_id, trade_date, tier, source_a, source_b)
+);
+CREATE INDEX IF NOT EXISTS idx_xcheck_subject_date
+    ON cross_source_check (subject_id, trade_date);

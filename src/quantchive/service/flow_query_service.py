@@ -97,15 +97,26 @@ class FlowQueryService:
             ))
 
         divergence = self._detect_divergence(rows)
+        last_td = rows[-1].trade_date
         prov = DataProvenance(
-            trade_date=rows[-1].trade_date, source_type=SourceType(rows[-1].value_type),
+            trade_date=last_td, source_type=SourceType(rows[-1].value_type),
             source_id=rows[-1].source_code, captured_at=rows[-1].minute_slot,
-            is_stale=False)
+            is_stale=False, validation=self._validation_status(subject_id, last_td))
         return TiersSeriesResult(
             subject_id=subject_id, source_symbol=subject["source_symbol"],
             display_name=subject["display_name"], granularity=granularity,
             has_gross=has_gross, provenance=prov, points=points,
             divergence=divergence, gap_count=gap)
+
+    def _validation_status(self, subject_id: int, trade_date: str) -> str | None:
+        """该股该日跨源校验角标:有分歧→'divergence'、有记录全ok→'ok'、无记录→None(未校验)。"""
+        row = self._conn.execute(
+            """SELECT SUM(verdict='divergence'), COUNT(*) FROM cross_source_check
+               WHERE subject_id=? AND trade_date=?""",
+            (subject_id, trade_date)).fetchone()
+        if not row or not row[1]:
+            return None
+        return "divergence" if row[0] else "ok"
 
     @staticmethod
     def _tier(net_cents: int | None, gross_cents: int | None) -> TierValues | None:

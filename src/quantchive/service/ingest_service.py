@@ -1085,3 +1085,76 @@ def derive_sector_tiers(
                    subjects_failed=len(sectors) - written)
     return {"trade_date": trade_date, "sectors_total": len(sectors), "sectors_written": written}
 
+
+def run_cross_source_validation(
+    conn, *, baidu_source, trade_date: str | None = None, sample_size: int = 30,
+    magnitude_ratio: float = 3.0, sina_code: str = "sina_flow", baidu_code: str = "baidu_flow",
+) -> dict:
+    """收盘后跨源校验:抽样个股,百度当日四档 vs 新浪当日四档,逐档判定,分歧记审计。
+
+    只标记不改数(宪章V):结果写 cross_source_check 表,不动 observation。
+    baidu_source: BaiduFlowSource(page_factory 可注入,测试不联网)。
+    """
+    from datetime import datetime as _dt, timezone as _tz
+
+    from quantchive.core.money import to_cents
+    from quantchive.datasource.validate import cross_source_verdict
+    from quantchive.models.enums import AmountUnit, ValueType
+
+    obs_dao = ObservationDao(conn)
+    if trade_date is None:
+        row = conn.execute(
+            "SELECT MAX(trade_date) FROM observation WHERE source_code=? AND value_type='daily_final'",
+            (sina_code,)).fetchone()
+        trade_date = row[0] if row else None
+    if not trade_date:
+        return {"trade_date": None, "checked": 0, "divergences": 0, "reason": "无 sina 日线"}
+
+    # 抽样:当日有 sina 四档的个股(轮换:按 subject_id 取模,简单覆盖)
+    rows = obs_dao.stock_rows_for(
+        trade_date=trade_date, value_type=ValueType.DAILY_FINAL,
+        minute_slot="EOD", source_code=sina_code)
+    sina_by_symbol = {r.source_symbol: r for r in rows if r.main_net_cents is not None}
+    codes = sorted(sina_by_symbol)[:sample_size]
+    if not codes:
+        return {"trade_date": trade_date, "checked": 0, "divergences": 0}
+
+    probes = baidu_source.probe(codes)   # list[BaiduTierProbe]
+    now_iso = _dt.now(_tz.utc).isoformat()
+    _TIER_NET = {  # 内部档位名 → sina 行的 net 列 getter
+        "super_large": lambda r: r.super_large_net_cents,
+        "large": lambda r: r.large_net_cents,
+        "medium": lambda r: r.medium_net_cents,
+        "small": lambda r: r.small_net_cents,
+    }
+    checked = 0
+    divergences = 0
+    for probe in probes:
+        sina_row = sina_by_symbol.get(probe.code)
+        if sina_row is None:
+            continue
+        sid = sina_row.subject_id
+        for tier, getter in _TIER_NET.items():
+            sina_net = getter(sina_row)
+            btier = probe.tiers.get(tier)
+            if sina_net is None or btier is None:
+                continue
+            baidu_net = to_cents(btier["net"], AmountUnit.YUAN)
+            verdict = cross_source_verdict(sina_net, baidu_net, magnitude_ratio=magnitude_ratio)
+            checked += 1
+            if verdict.status == "divergence":
+                divergences += 1
+            conn.execute(
+                """INSERT INTO cross_source_check
+                   (subject_id, trade_date, tier, source_a, source_b,
+                    net_a_cents, net_b_cents, verdict, reason, created_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?)
+                   ON CONFLICT(subject_id, trade_date, tier, source_a, source_b) DO UPDATE SET
+                     net_a_cents=excluded.net_a_cents, net_b_cents=excluded.net_b_cents,
+                     verdict=excluded.verdict, reason=excluded.reason, created_at=excluded.created_at""",
+                (sid, trade_date, tier, sina_code, baidu_code, sina_net, baidu_net,
+                 verdict.status, verdict.reason, now_iso))
+    return {"trade_date": trade_date, "sampled": len(codes),
+            "checked": checked, "divergences": divergences}
+
+

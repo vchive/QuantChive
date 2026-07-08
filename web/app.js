@@ -44,9 +44,12 @@ async function api(path) {
 
 function setProvenance(p, extra = "") {
   if (!p) { $("prov").textContent = extra; return; }
+  const vbadge = p.validation === "ok" ? ' · <span class="vok">✓跨源校验通过</span>'
+    : p.validation === "divergence" ? ' · <span class="vdiv">⚠️跨源口径分歧</span>' : "";
   $("prov").innerHTML =
     `交易日 <b>${p.trade_date}</b> · 时点 ${p.captured_at} · 来源 ${p.source_id}`
-    + (p.is_stale ? ' · <span class="stale">非实时(最近交易日)</span>' : "") + (extra ? " · " + extra : "");
+    + (p.is_stale ? ' · <span class="stale">非实时(最近交易日)</span>' : "")
+    + vbadge + (extra ? " · " + extra : "");
 }
 
 function renderCrumbs() {

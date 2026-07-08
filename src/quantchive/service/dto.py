@@ -30,6 +30,7 @@ class DataProvenance(_Base):
     captured_at: str  # minute_slot 或 'EOD'
     is_stale: bool
     is_approximate_final: bool = False
+    validation: str | None = None  # None=未校验 | 'ok'跨源一致 | 'divergence'口径分歧(spec005 T031)
 
 
 class HealthResult(_Base):
