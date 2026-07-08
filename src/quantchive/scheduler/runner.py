@@ -45,6 +45,13 @@ def tick_once(
             run_target_fn(conn, "sector")  # 收盘补板块日终（个股/ETF 同理可扩展）
         except Exception as exc:
             _log.warning("EOD 失败", extra={"context": {"err": str(exc)}})
+        # 板块四档由成分股当日四档求和派生（写 is_derived daily_final 行,供板块博弈图）
+        try:
+            from quantchive.service.ingest_service import derive_sector_tiers
+            r = derive_sector_tiers(conn)
+            _log.info("板块四档派生", extra={"context": r})
+        except Exception as exc:
+            _log.warning("板块派生失败", extra={"context": {"err": str(exc)}})
         scheduler.mark_eod_done(now)
         eod = True
     # 3) 保留降采 + 清理

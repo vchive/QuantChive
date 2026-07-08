@@ -41,7 +41,7 @@ _log = get_logger(__name__)
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="quantchive-collect")
     parser.add_argument("--target", default="sector",
-                        choices=["sector", "stock", "etf", "members", "backfill"])
+                        choices=["sector", "stock", "etf", "members", "backfill", "derive-sectors"])
     parser.add_argument("--sector-type", default="industry,concept")
     parser.add_argument("--scope", default="stock", choices=["stock"],
                         help="backfill: 回填个股历史")
@@ -66,8 +66,22 @@ def main(argv: list[str] | None = None) -> None:
         print(f"✗ {exc}", file=sys.stderr)
         sys.exit(2)
 
+    # derive-sectors：板块四档由成分股求和派生（盘后，写 is_derived 日线行）
+    if args.target == "derive-sectors":
+        from quantchive.service.ingest_service import derive_sector_tiers
+
+        def _dprog(done, total, name):
+            if done % 100 == 0 or done == total:
+                print(f"  派生 {done}/{total} … {name}", flush=True)
+        summary = derive_sector_tiers(conn, progress=_dprog)
+        _log.info("板块四档派生完成", extra={"context": summary})
+        print(f"derive-sectors: {summary.get('trade_date')} · 板块 "
+              f"{summary.get('sectors_written')}/{summary.get('sectors_total')} 落派生")
+        sys.exit(0)
+
     # backfill：历史回填（逐主体自动提交，不包大事务）
     if args.target == "backfill":
+
         def _prog(done, total, name):
             if done % 100 == 0 or done == total:
                 print(f"  回填 {done}/{total} … {name}", flush=True)

@@ -34,12 +34,33 @@ class MarketAggregate:
     reason: str | None = None
 
 
+@dataclass(frozen=True)
+class SectorTierAggregate:
+    """板块四档求和结果（net 五档 + gross 四档，纯计算无 DB）。"""
+
+    written: bool
+    coverage: float
+    constituent_count: int
+    expected_count: int
+    five_tier_cents: dict[str, int] | None      # 五档 net
+    four_gross_cents: dict[str, int] | None      # 四档 gross（全成分有 gross 才落，否则 None）
+    component_hash: str | None
+    reason: str | None = None
+
+
 _TIER_ATTRS = (
     ("main_net_cents", lambda r: r.main_net_cents),
     ("super_large_net_cents", lambda r: r.super_large_net_cents),
     ("large_net_cents", lambda r: r.large_net_cents),
     ("medium_net_cents", lambda r: r.medium_net_cents),
     ("small_net_cents", lambda r: r.small_net_cents),
+)
+
+_GROSS_ATTRS = (
+    ("super_large_gross_cents", lambda r: r.super_large_gross_cents),
+    ("large_gross_cents", lambda r: r.large_gross_cents),
+    ("medium_gross_cents", lambda r: r.medium_gross_cents),
+    ("small_gross_cents", lambda r: r.small_gross_cents),
 )
 
 
@@ -82,6 +103,44 @@ def aggregate_stock_cents(
         expected_count=expected_count, main_net_cents=five_tier["main_net_cents"],
         five_tier_cents=five_tier, component_hash=component_hash,
     )
+
+
+def aggregate_sector_tiers(
+    rows: list[ObservationRow], *, expected_count: int, threshold: float = _DEFAULT_THRESHOLD,
+) -> SectorTierAggregate:
+    """板块四档派生：成分股当日四档求和（净额五档 + 成交额四档）。纯计算无 DB，禁 float。
+
+    覆盖率门禁同大盘（constituent/expected ≥ threshold 才落，宁缺勿假）。
+    gross 求和：仅当**全部**参与成分股都带四档 gross 时才落 four_gross（sina 行才有）；
+    任一成分缺 gross → four_gross=None（诚实，避免部分求和的假 gross）。
+    """
+    valid = [r for r in rows if r.main_net_cents is not None]
+    constituent = len(valid)
+    symbols = sorted(r.source_symbol for r in valid)
+    component_hash = hashlib.sha256("\n".join(symbols).encode("utf-8")).hexdigest()
+
+    if expected_count <= 0:
+        return SectorTierAggregate(
+            written=False, coverage=0.0, constituent_count=constituent,
+            expected_count=expected_count, five_tier_cents=None, four_gross_cents=None,
+            component_hash=component_hash, reason="expected 未知，覆盖率不可校验")
+    coverage = constituent / expected_count
+    if coverage < threshold:
+        return SectorTierAggregate(
+            written=False, coverage=coverage, constituent_count=constituent,
+            expected_count=expected_count, five_tier_cents=None, four_gross_cents=None,
+            component_hash=component_hash, reason=f"覆盖率 {coverage:.4f} < {threshold}")
+
+    five_tier = {col: sum(int(getter(r) or 0) for r in valid) for col, getter in _TIER_ATTRS}
+    # 四档 gross：全成分有 gross 才求和（否则 None，不落部分假 gross）
+    all_have_gross = all(r.super_large_gross_cents is not None for r in valid)
+    four_gross = (
+        {col: sum(int(getter(r)) for r in valid) for col, getter in _GROSS_ATTRS}
+        if valid and all_have_gross else None)
+    return SectorTierAggregate(
+        written=True, coverage=coverage, constituent_count=constituent,
+        expected_count=expected_count, five_tier_cents=five_tier,
+        four_gross_cents=four_gross, component_hash=component_hash)
 
 
 class MarketAggregator:

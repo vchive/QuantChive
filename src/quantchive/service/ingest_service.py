@@ -1012,3 +1012,76 @@ def retention_cleanup(
     deleted = obs_dao.delete_before_date(trade_date_exclusive=cutoff)
     run_dao.finish(run_id, status=RunStatus.SUCCESS, subjects_ok=deleted, subjects_failed=0)
     return {"rows_deleted": deleted, "cutoff_date": cutoff}
+
+
+def derive_sector_tiers(
+    conn, *, trade_date: str | None = None, source_code: str = "sina_flow",
+    threshold: float | None = None, progress: "object | None" = None,
+) -> dict:
+    """板块四档 gross/net 由成分股当日四档求和派生（盘后，写 is_derived daily_final 行）。
+
+    个股有 sina 四档 gross+net，板块（行业/概念）无——sina 只覆盖个股。板块 = 成分股当日
+    四档求和。覆盖率门禁（宁缺勿假）；成分按 members_asof（无前视）；gross 全成分有才落。
+    派生行 source_code=sina_flow（复用 tiers_rows_daily 查询，靠 is_derived+level=sector 区分）。
+    """
+    from datetime import datetime as _dt, timezone as _tz
+
+    from quantchive.dao.constituent_dao import ConstituentDao
+    from quantchive.core.settings import get_settings
+    from quantchive.models.enums import AssetClass, SubjectLevel, ValueType
+    from quantchive.service.market_aggregate import aggregate_sector_tiers
+
+    threshold = threshold if threshold is not None else get_settings().market_coverage_threshold
+    obs_dao = ObservationDao(conn)
+    subject_dao = SubjectDao(conn)
+    constituent_dao = ConstituentDao(conn)
+    run_dao = RunDao(conn)
+
+    # 目标日：默认最新有 sina 日线的交易日
+    if trade_date is None:
+        row = conn.execute(
+            "SELECT MAX(trade_date) FROM observation WHERE source_code=? AND value_type='daily_final'",
+            (source_code,)).fetchone()
+        trade_date = row[0] if row else None
+    if not trade_date:
+        return {"trade_date": None, "sectors_total": 0, "sectors_written": 0, "reason": "无 sina 日线"}
+
+    now_iso = _dt.now(_tz.utc).isoformat()
+    run_id = run_dao.start(
+        source_code=source_code, run_type=RunType.MARKET_AGGREGATE, caliber=Caliber.EASTMONEY,
+        trade_date=trade_date, minute_slot="EOD", adapter_version="derive-sector-v1",
+        subject_scope="sectors", asset_class_code=AssetClass.A_SHARE.value)
+
+    # 当日全个股四档行一次读入，按 subject_id 索引（避免每板块重查）
+    stock_rows = obs_dao.stock_rows_for(
+        trade_date=trade_date, value_type=ValueType.DAILY_FINAL,
+        minute_slot="EOD", source_code=source_code)
+    by_sid = {r.subject_id: r for r in stock_rows}
+
+    sectors = subject_dao.list_by(asset_class=AssetClass.A_SHARE, level=SubjectLevel.SECTOR)
+    written = 0
+    for i, sec in enumerate(sectors, 1):
+        member_ids = constituent_dao.members_asof(
+            parent_subject_id=sec["subject_id"], as_of=trade_date)
+        if not member_ids:
+            continue
+        member_rows = [by_sid[mid] for mid in member_ids if mid in by_sid]
+        agg = aggregate_sector_tiers(
+            member_rows, expected_count=len(member_ids), threshold=threshold)
+        if not agg.written:
+            continue
+        obs_dao.upsert(
+            subject_id=sec["subject_id"], source_code=source_code, trade_date=trade_date,
+            minute_slot="EOD", value_type=ValueType.DAILY_FINAL, granularity="daily",
+            observed_at=now_iso, net_amount_cents=agg.five_tier_cents["main_net_cents"],
+            five_tier=agg.five_tier_cents, four_gross=agg.four_gross_cents,
+            constituent_count=agg.constituent_count, expected_count=agg.expected_count,
+            source_unit="yuan", is_derived=True, ingestion_run_id=run_id, created_at=now_iso)
+        written += 1
+        if progress and (i % 100 == 0 or i == len(sectors)):
+            progress(i, len(sectors), sec.get("display_name", ""))
+
+    run_dao.finish(run_id, status=RunStatus.SUCCESS, subjects_ok=written,
+                   subjects_failed=len(sectors) - written)
+    return {"trade_date": trade_date, "sectors_total": len(sectors), "sectors_written": written}
+
