@@ -288,3 +288,31 @@ class BatchSeriesResult(_Base):
     start_date: str
     end_date: str
     series: list[SubjectSeriesResult]
+
+
+class SignalBacktestStat(_Base):
+    """单信号×单horizon的历史统计（阶段B,金额/比率字符串,禁前端float）。"""
+
+    signal_kind: str
+    horizon: int                 # T+N 交易日
+    trigger_count: int           # 有效样本数(有前向收益的触发点)
+    win_rate: str                # 胜率百分比字符串,如 "62.5"
+    avg_return_pct: str          # 平均前向收益(百分比,带符号)
+    median_return_pct: str
+    wilson_low: str              # Wilson 95% CI 下界(百分比)
+    wilson_high: str
+    baseline_win_rate: str       # 无条件基准(全期日涨占比,百分比)
+    reliable: bool               # 样本≥30
+    note: str | None = None      # 样本不足等诚实标注
+
+
+class SignalBacktestResult(_Base):
+    """某股某信号的多horizon回测结果(历史统计,非预测)。"""
+
+    subject_id: int
+    source_symbol: str
+    display_name: str
+    as_of: str
+    lookback_start: str
+    stats: list[SignalBacktestStat]
+    disclaimer: str = "历史条件统计,非未来预测;不构成投资建议"

@@ -45,8 +45,8 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--sector-type", default="industry,concept")
     parser.add_argument("--scope", default="stock", choices=["stock"],
                         help="backfill: 回填个股历史")
-    parser.add_argument("--source", default="baostock", choices=["baostock", "sina", "eastmoney"],
-                        help="backfill: 历史源（baostock 价量/不限流；sina 资金流/不限流；eastmoney 资金流/受限流）")
+    parser.add_argument("--source", default="baostock", choices=["baostock", "baostock_hfq", "sina", "eastmoney"],
+                        help="backfill: 历史源（baostock 价量/不限流；baostock_hfq 后复权价/回测标签；sina 资金流/不限流；eastmoney 资金流/受限流）")
     parser.add_argument("--metric", default="price_hist", choices=["price_hist", "money_flow"],
                         help="backfill: 指标类别")
     parser.add_argument("--days", type=int, default=30, help="backfill: 回填交易日数")
@@ -108,6 +108,19 @@ def main(argv: list[str] | None = None) -> None:
                 source_code="baostock", limit=args.limit, progress=_prog)
             _log.info("历史回填完成", extra={"context": summary})
             print(f"backfill[baostock/{summary['scope']}]: 主体 "
+                  f"{summary['subjects_ok']}/{summary['subjects_total']} · 日线行 {summary['rows_written']} "
+                  f"· {summary['days']}天 · 跳过已存 {summary['skipped_covered']} · 失败 {summary['subjects_failed']}")
+            sys.exit(1 if summary["rows_written"] == 0 and summary["skipped_covered"] == 0 else 0)
+
+        # baostock 后复权价历史（阶段B 回测标签，独立 source_code 防覆盖 qfq 展示行）
+        if args.source == "baostock_hfq":
+            from quantchive.datasource.baostock_src import BaostockSource
+            from quantchive.service.ingest_service import backfill_price_history
+            summary = backfill_price_history(
+                conn, source=BaostockSource(), scope=args.scope, days=args.days,
+                source_code="baostock_hfq", adjust="hfq", limit=args.limit, progress=_prog)
+            _log.info("hfq历史回填完成", extra={"context": summary})
+            print(f"backfill[baostock_hfq/{summary['scope']}]: 主体 "
                   f"{summary['subjects_ok']}/{summary['subjects_total']} · 日线行 {summary['rows_written']} "
                   f"· {summary['days']}天 · 跳过已存 {summary['skipped_covered']} · 失败 {summary['subjects_failed']}")
             sys.exit(1 if summary["rows_written"] == 0 and summary["skipped_covered"] == 0 else 0)

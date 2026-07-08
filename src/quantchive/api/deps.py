@@ -25,3 +25,9 @@ def get_fund_lookup_service():
     from quantchive.datasource.fund_src import FundSource
     from quantchive.service.fund_lookup_service import FundLookupService
     return FundLookupService(FundSource())
+
+
+def get_backtest_service():
+    """信号回测服务（阶段B）。per-request conn。"""
+    from quantchive.service.backtest_service import BacktestService
+    return BacktestService(get_conn())

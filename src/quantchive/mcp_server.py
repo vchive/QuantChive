@@ -30,7 +30,8 @@ from quantchive.service.flow_query_service import FlowQueryService
 from quantchive.service.flow_topology_service import FlowTopologyService
 from quantchive.service.fund_lookup_service import FundLookupService
 from quantchive.service.query_service import QueryService
-
+from quantchive.service.backtest_service import BacktestService
+from quantchive.service.signal_lib import SIGNAL_KINDS
 mcp = FastMCP("quantchive")
 
 
@@ -176,6 +177,27 @@ def get_tiers_series(subject_id: int, granularity: str = "daily") -> dict:
             return _err(e)
 
 
+def signal_backtest(subject_id: int, kinds: str | None = None, horizons: str = "1,3,5") -> dict:
+    """某股资金流信号历史回测(历史统计,非预测)。
+
+    返回各信号×各horizon:触发次数、胜率、Wilson 95%置信区间、平均/中位前向收益、
+    无条件基准(全期日涨占比)、样本是否可靠(n<30标注不可靠)。
+    信号=吸筹背离/派发背离/连续净流入/超大单异动;只用as-of前数据(防前视),
+    标签用后复权价前向收益链式乘(防漂移)。用于回答"这类信号历史上后续涨的比例",
+    绝不据此断言次日涨跌概率。
+    """
+    kind_list = (
+        [k.strip() for k in kinds.split(",") if k.strip() in SIGNAL_KINDS]
+        if kinds else list(SIGNAL_KINDS))
+    hz = tuple(int(h) for h in horizons.split(",") if h.strip().isdigit()) or (1, 3, 5)
+    with _readonly_conn() as conn:
+        try:
+            return _dump(BacktestService(conn).backtest_stock(
+                subject_id=subject_id, kinds=kind_list, horizons=hz))
+        except QueryError as e:
+            return _err(e)
+
+
 def flow_topology(trade_date: str | None = None, tier: str = "main",
                   top_sectors: int = 20) -> dict:
     """资金流向拓扑:大盘→行业(TopN)桑基。tier: main|super_large|large|medium|small。"""
@@ -238,7 +260,7 @@ _TOOLS = [
     search_subject, list_subjects, describe_capability, market_overview, rank_sectors,
     rank_stocks_in_sector, scan_market_stocks, rank_etf, get_series,
     get_tiers_series, flow_topology, sector_trends, get_series_range,
-    get_series_batch, fund_nav,
+    get_series_batch, fund_nav, signal_backtest,
 ]
 for _fn in _TOOLS:
     mcp.tool()(_fn)

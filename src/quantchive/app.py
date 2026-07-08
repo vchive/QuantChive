@@ -22,6 +22,7 @@ from quantchive.api.routers import (
     market,
     meta,
     sectors,
+    signals,
     stocks,
     subjects,
 )
@@ -73,7 +74,7 @@ def create_app() -> FastAPI:
     configure_logging()
     app = FastAPI(title="QuantChive 通用市场观测平台", version="0.2.0", lifespan=lifespan)
     app.add_exception_handler(QueryError, query_error_handler)
-    for r in (sectors, market, stocks, etf, funds, meta, subjects, health, flow, agent):
+    for r in (sectors, market, stocks, etf, funds, meta, subjects, health, flow, agent, signals):
         app.include_router(r.router)
     app.include_router(flow.topology_router)
     if _WEB_DIR.exists():

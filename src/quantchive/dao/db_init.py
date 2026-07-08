@@ -16,6 +16,8 @@ _SEED_SOURCES = [
     ("em_fund", "东财基金", "eastmoney", 0, 0, "yuan", "fund_src.FundSource", 1),
     # spec003：baostock 历史行情源（无资金流）；ths_flow 同花顺资金流备源（初始停用，验 hexin-v 后启用）
     ("baostock", "baostock 历史行情", "baostock", 0, 1, "yuan", "baostock_src.BaostockSource", 1),
+    # 阶段B：baostock 后复权(hfq)价，专供回测标签(前向收益链式乘hfq close)——独立source_code防覆盖qfq展示行
+    ("baostock_hfq", "baostock 后复权行情", "baostock", 0, 1, "yuan", "baostock_src.BaostockSource", 1),
     ("ths_flow", "同花顺资金流", "ths", 1, 0, "yuan", "ths_flow_src.ThsFlowSource", 0),
     # 新浪个股历史资金流（独立于东财，五档齐全，约8年深，实测可用）
     ("sina_flow", "新浪资金流历史", "sina", 1, 1, "yuan", "sina_flow_src.SinaFlowSource", 1),
