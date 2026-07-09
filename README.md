@@ -5,7 +5,9 @@
 - **主体分层下钻**：大盘 → 板块（行业/概念）→ 个体（个股/ETF）。
 - **能力自描述**：不同主体/品种支持的指标不同，平台诚实按能力暴露（不支持时明确告知，绝不伪造）。
 - **本期真实数据**：A股（大盘资金流求和 + 行业/概念板块五档 + 个股价量五档 + 板块内下钻）、基金/ETF（价/量/规模 proxy + 开放式基金按需净值）。债券/期货/商品/外汇架构预留。
-- **agent-ready**：查询能力沉淀在人与未来 LangChain agent 共用的只读 Service 层，字段自描述、错误结构化。
+- **五大前端视图**：大盘/个股**资金档位博弈**(四档流入流出+背离) · **资金流向拓扑**(大盘→行业→个股,桑基/旭日/树图) · **信号扫描**(全市场今日闪信号+个股历史胜率回测) · **智能助手**(ReAct agent,provider无关) · 基金ETF。
+- **前瞻能力(诚实)**：资金流信号回测给「历史条件胜率+Wilson置信区间+样本数+基准对照」，**不编次日概率**(次日方向天花板51-55%,守住不前视/不编数据)。
+- **agent-ready**：查询能力沉淀在人与 agent 共用的只读 Service 层；MCP server 暴露 16 工具(含 signal_backtest)；前端自建 ReAct agent + 支持 Hermes 接入对比。
 
 ## 技术栈
 
@@ -30,12 +32,17 @@ uv run quantchive-collect --target members     # 板块→成分个股归属（�
 
 # 历史行情回填（baostock，独立于东财限流，回溯多年）
 uv run quantchive-collect --target backfill --source baostock --scope stock --days 60  # 价/量/额历史
-# 历史资金流回填（东财 fflow，受限流；节流缓解）
-uv run quantchive-collect --target backfill --source eastmoney --metric money_flow --scope stock --days 60
+# 历史资金流回填（新浪逐股,免费补近5年四档gross+net,信号回测地基）
+uv run quantchive-collect --target backfill --source sina --days 1825
+# 板块四档派生 + 信号扫描预计算（盘后,供板块博弈图/信号扫描tab）
+uv run quantchive-collect --target derive-sectors
+uv run quantchive-collect --target scan-signals
 
 # 起 Web（下钻可视化 + 只读 API）
 uv run uvicorn quantchive.app:app --reload
-# 打开 http://127.0.0.1:8000 —— 品种Tab → 大盘卡片 → 板块双榜 → 板块内个股 → 主体时序(日线/分钟切换)
+# 打开 http://127.0.0.1:8000 —— 品种Tab(A股/基金ETF/资金流向/信号扫描/智能助手)
+#   A股: 大盘卡片 → 板块双榜 → 板块内个股 → 个股资金档位博弈(可展开信号历史回测)
+#   信号扫描: 选信号 → 全市场今日命中股 → 点股看博弈图+历史胜率
 
 # 全量测试
 uv run pytest
