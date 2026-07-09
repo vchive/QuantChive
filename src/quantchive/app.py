@@ -77,6 +77,7 @@ def create_app() -> FastAPI:
     for r in (sectors, market, stocks, etf, funds, meta, subjects, health, flow, agent, signals):
         app.include_router(r.router)
     app.include_router(flow.topology_router)
+    app.include_router(signals.scan_router)
     if _WEB_DIR.exists():
         app.mount("/", StaticFiles(directory=str(_WEB_DIR), html=True), name="web")
     return app

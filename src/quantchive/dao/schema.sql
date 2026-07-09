@@ -217,3 +217,17 @@ CREATE TABLE IF NOT EXISTS cross_source_check (
 );
 CREATE INDEX IF NOT EXISTS idx_xcheck_subject_date
     ON cross_source_check (subject_id, trade_date);
+
+-- ============================================================================
+-- 阶段B 信号扫描：某股某日命中某资金流信号（盘后预计算,前端秒读,仿板块派生）
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS signal_hit (
+    hit_id      INTEGER PRIMARY KEY,
+    subject_id  INTEGER NOT NULL REFERENCES subject(subject_id),
+    trade_date  TEXT NOT NULL,
+    kind        TEXT NOT NULL,          -- accumulation|distribution|net_inflow_streak|super_large_spike
+    strength    INTEGER,                -- 信号强度(语义随kind:累计净额分/连续天数/z-score×100)
+    created_at  TEXT NOT NULL,
+    UNIQUE (subject_id, trade_date, kind)
+);
+CREATE INDEX IF NOT EXISTS idx_signal_hit_scan ON signal_hit (kind, trade_date, strength);

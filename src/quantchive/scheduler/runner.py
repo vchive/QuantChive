@@ -52,6 +52,13 @@ def tick_once(
             _log.info("板块四档派生", extra={"context": r})
         except Exception as exc:
             _log.warning("板块派生失败", extra={"context": {"err": str(exc)}})
+        # 信号扫描预计算（写 signal_hit,供前端信号扫描 tab 秒读）
+        try:
+            from quantchive.service.scan_service import scan_and_store
+            r = scan_and_store(conn)
+            _log.info("信号扫描", extra={"context": r})
+        except Exception as exc:
+            _log.warning("信号扫描失败", extra={"context": {"err": str(exc)}})
         scheduler.mark_eod_done(now)
         eod = True
     # 3) 保留降采 + 清理

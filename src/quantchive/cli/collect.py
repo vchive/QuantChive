@@ -41,7 +41,7 @@ _log = get_logger(__name__)
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="quantchive-collect")
     parser.add_argument("--target", default="sector",
-                        choices=["sector", "stock", "etf", "members", "backfill", "derive-sectors"])
+                        choices=["sector", "stock", "etf", "members", "backfill", "derive-sectors", "scan-signals"])
     parser.add_argument("--sector-type", default="industry,concept")
     parser.add_argument("--scope", default="stock", choices=["stock"],
                         help="backfill: 回填个股历史")
@@ -77,6 +77,18 @@ def main(argv: list[str] | None = None) -> None:
         _log.info("板块四档派生完成", extra={"context": summary})
         print(f"derive-sectors: {summary.get('trade_date')} · 板块 "
               f"{summary.get('sectors_written')}/{summary.get('sectors_total')} 落派生")
+        sys.exit(0)
+
+    # scan-signals：全市场信号扫描预计算（盘后，写 signal_hit 供前端秒读）
+    if args.target == "scan-signals":
+        from quantchive.service.scan_service import scan_and_store
+
+        def _sprog(done, total, name):
+            print(f"  扫描 {done}/{total}", flush=True)
+        summary = scan_and_store(conn, progress=_sprog)
+        _log.info("信号扫描完成", extra={"context": summary})
+        print(f"scan-signals: {summary.get('trade_date')} · 扫描 {summary.get('scanned')}股 "
+              f"· 命中 {summary.get('hits')}(信号×股)")
         sys.exit(0)
 
     # backfill：历史回填（逐主体自动提交，不包大事务）

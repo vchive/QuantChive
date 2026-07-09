@@ -269,6 +269,8 @@ async function viewSeries(subjectId, name, metric = "main_net", gran = "daily", 
       + (data.has_gross ? " · 含流入流出" : " · 仅净额（盘中无流入流出）")
       + (divTxt ? ` · 背离：${divTxt}` : "")));
     setProvenance(data.provenance);
+    // —— 信号历史回测面板（折叠,展开才拉,单股快）——
+    v.appendChild(buildBacktestPanel(subjectId));
   } catch (e) {
     v.innerHTML = "";
     v.appendChild(el("h2", null, `${name} · 资金档位博弈`));
@@ -277,6 +279,51 @@ async function viewSeries(subjectId, name, metric = "main_net", gran = "daily", 
       : e.code === "NO_DATA_FOR_DATE" ? (e.message || "无数据") : `${e.code}: ${e.message}`;
     v.appendChild(el("div", "hint", msg));
   }
+}
+
+// ---- 信号历史回测面板（折叠,展开懒加载;历史统计非预测）----
+function buildBacktestPanel(subjectId) {
+  const det = el("details", "agent-trace-det");
+  det.style.marginTop = "16px";
+  det.appendChild(el("summary", null, "📊 信号历史回测（该股各资金流信号后续胜率 · 历史统计非预测）"));
+  const body = el("div"); body.style.padding = "8px 0";
+  det.appendChild(body);
+  let loaded = false;
+  det.addEventListener("toggle", async () => {
+    if (!det.open || loaded) return;
+    loaded = true;
+    body.appendChild(el("div", "hint", "回测中…（近5年,4信号×多周期）"));
+    try {
+      const d = await api(`/api/subjects/${subjectId}/signal_backtest?horizons=1,5`);
+      body.innerHTML = "";
+      body.appendChild(el("div", "hint",
+        `样本区间 ${d.lookback_start} ~ ${d.as_of} · 标签源 ${d.price_source} · ${d.disclaimer}`));
+      const t = el("table", "grid");
+      t.appendChild(el("thead", null,
+        "<tr><th>信号</th><th>周期</th><th>触发</th><th>胜率</th><th>95%区间</th>"
+        + "<th>均值</th><th>基准</th><th>可靠</th></tr>"));
+      const tb = el("tbody");
+      d.stats.forEach((s) => {
+        const name = (SIGNAL_META[s.signal_kind] || [s.signal_kind])[0];
+        const beat = Number(s.win_rate) > Number(s.baseline_win_rate);
+        const tr = el("tr");
+        [[name, "name"], [`T+${s.horizon}`, ""], [s.trigger_count, ""],
+         [`${s.win_rate}%`, beat ? "pos" : ""], [`${s.wilson_low}~${s.wilson_high}%`, ""],
+         [`${s.avg_return_pct}%`, signCls(s.avg_return_pct)],
+         [`${s.baseline_win_rate}%`, ""], [s.reliable ? "✓" : "样本少", s.reliable ? "" : "neg"]]
+          .forEach(([txt, cls]) => tr.appendChild(el("td", cls, String(txt))));
+        tb.appendChild(tr);
+      });
+      t.appendChild(tb);
+      body.appendChild(t);
+      body.appendChild(el("div", "hint",
+        "胜率高于基准(标红)=该信号在此股历史上有正向 edge;样本<30 不可靠仅参考。"));
+    } catch (e) {
+      body.innerHTML = "";
+      body.appendChild(el("div", "hint", `回测不可用：${e.code || ""} ${e.message || e}`));
+    }
+  });
+  return det;
 }
 
 // ---- 天内时点回放框架（播放选中日当日的资金变化：近期分钟级、久远小时级）----
@@ -563,6 +610,82 @@ async function viewSectorTreemap(sectorId, sectorName, tier, tradeDate = "") {
   }
 }
 
+// ---- 信号扫描：全市场今日闪某信号的股(盘后预计算,秒读)----
+const SIGNAL_META = {
+  accumulation: ["吸筹背离", "价跌但主力累计净流入 —— 疑似逆势吸筹建仓"],
+  distribution: ["派发背离", "价涨但主力累计净流出 —— 疑似高位派发出货"],
+  net_inflow_streak: ["连续净流入", "主力净额连续多日为正 —— 资金持续流入"],
+  super_large_spike: ["超大单异动", "超大单净额相对自身近期异常放大 —— 机构大额动作"],
+};
+const SIGNAL_ORDER = ["accumulation", "distribution", "net_inflow_streak", "super_large_spike"];
+
+function fmtStrength(kind, v) {
+  if (v == null) return "—";
+  if (kind === "net_inflow_streak") return `连续 ${v} 日`;
+  if (kind === "super_large_spike") return `${(v / 100).toFixed(1)}σ`;
+  return fmtYi(v / 100);   // 累计净额:分→元→亿
+}
+
+async function renderSignalScan(kind = "accumulation", tradeDate = "") {
+  const v = $("view"); v.innerHTML = "";
+  const [label, desc] = SIGNAL_META[kind] || SIGNAL_META.accumulation;
+
+  // 信号切换按钮
+  const sigToggle = el("div", "gran-toggle");
+  SIGNAL_ORDER.forEach((k) => {
+    const b = el("button", "gran" + (k === kind ? " active" : ""), SIGNAL_META[k][0]);
+    b.onclick = () => { logClick("切信号", SIGNAL_META[k][0]); renderSignalScan(k, tradeDate); };
+    sigToggle.appendChild(b);
+  });
+  v.appendChild(sigToggle);
+  v.appendChild(el("div", "hint", desc + " —— 历史统计口径,点个股看该信号历史胜率,非预测。"));
+
+  const skel = el("div", "skeleton"); skel.style.height = "400px"; skel.style.margin = "12px 0";
+  v.appendChild(skel);
+  try {
+    const data = await api(`/api/signals/scan?kind=${kind}&trade_date=${tradeDate}&top_n=100`);
+    v.removeChild(skel);
+    if (!data.trade_date) {
+      v.appendChild(el("div", "empty", "暂无信号扫描数据 —— 需盘后运行 quantchive-collect --target scan-signals。"));
+      return;
+    }
+    // 日期选择(可用扫描日)
+    const availSet = new Set(data.available_dates || []);
+    const bar = el("div", "toggle-row");
+    bar.appendChild(el("span", "play-cap", `${label} · ${data.trade_date}`));
+    bar.appendChild(buildCalendar(availSet, data.trade_date,
+      (d) => { logClick("选扫描日", d); renderSignalScan(kind, d); }));
+    v.appendChild(bar);
+
+    if (!data.rows.length) {
+      v.appendChild(el("div", "empty", "该日无股命中此信号。"));
+    } else {
+      v.appendChild(el("h2", null, `命中股 ${data.rows.length} 只(按信号强度降序)`));
+      const t = el("table", "grid");
+      t.appendChild(el("thead", null,
+        "<tr><th>主体</th><th>现价</th><th>涨跌幅</th><th>信号强度</th></tr>"));
+      const tb = el("tbody");
+      data.rows.forEach((r) => {
+        const tr = el("tr");
+        const nameTd = el("td", "link", r.display_name);
+        nameTd.onclick = () => push(r.display_name,
+          () => viewSeries(r.subject_id, r.display_name, "main_net", "daily", "main"));
+        tr.appendChild(nameTd);
+        tr.appendChild(el("td", "", fmtNum(r.price)));
+        tr.appendChild(el("td", signCls(r.change_pct), fmtPct(r.change_pct)));
+        tr.appendChild(el("td", "", fmtStrength(kind, r.strength)));
+        tb.appendChild(tr);
+      });
+      t.appendChild(tb);
+      v.appendChild(t);
+    }
+    setProvenance(null, `信号扫描 · ${label} · ${data.trade_date}`);
+  } catch (e) {
+    if (skel.parentNode) v.removeChild(skel);
+    v.appendChild(el("div", "hint", `${e.code}: ${e.message}`));
+  }
+}
+
 // ---- 品种 Tab 切换：重置栈到根视图 ----
 function selectAsset(asset) {
   ASSET = asset;
@@ -572,6 +695,7 @@ function selectAsset(asset) {
   stack.length = 0;
   if (asset === "a_share") push("大盘", viewMarket);
   else if (asset === "topology") push("资金流向", () => viewTopology("main"));
+  else if (asset === "signal_scan") push("信号扫描", () => renderSignalScan("accumulation"));
   else if (asset === "agent") push("智能助手", renderAgentPanel);
   else push("ETF", viewEtf);
 }
