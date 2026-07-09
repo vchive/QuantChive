@@ -37,7 +37,7 @@ class BacktestService:
         self, *, subject_id: int, kinds: list[str] | None = None,
         horizons: tuple[int, ...] = _DEFAULT_HORIZONS, lookback_years: int = 5,
         as_of: str | None = None, window: int = 5, streak_n: int = 3,
-        z_window: int = 20, z_threshold: float = 2.0,
+        z_window: int = 20, z_threshold: float = 2.0, price_source: str = "sina",
     ) -> SignalBacktestResult:
         subject = self._subject.get(subject_id)
         if subject is None:
@@ -61,16 +61,18 @@ class BacktestService:
         flow_rows = self._obs.series_daily(
             subject_id=subject_id, sources=[_FLOW_SRC], nonnull_column="main_net_cents",
             start_date=lookback_start, end_date=as_of)
-        # 价序列(hfq 标签源):date→price_micro
-        price_rows = self._obs.series_daily(
-            subject_id=subject_id, sources=[_PRICE_SRC], nonnull_column="price_micro",
-            start_date=lookback_start, end_date=as_of)
-        price_by_date = {r.trade_date: r.price_micro for r in price_rows if r.price_micro}
-        if not flow_rows or not price_by_date:
+        if not flow_rows:
             raise NoDataForDate(
-                f"主体 {subject['display_name']} 缺流或hfq价(需回填 sina_flow + baostock_hfq)",
-                detail={"subject_id": subject_id, "flow": len(flow_rows), "price": len(price_by_date)})
-        # 交易日轴:以 hfq 价可得日为准(前向收益需连续价)
+                f"主体 {subject['display_name']} 无资金流日线(需回填 sina_flow)",
+                detail={"subject_id": subject_id})
+
+        # 标签价序列(混合):hfq 可选(严谨总回报,需回填)/ sina 默认(change_pct链式,即时全覆盖)
+        price_by_date, price_note = self._price_index(
+            subject_id, flow_rows, lookback_start, as_of, price_source)
+        if not price_by_date:
+            raise NoDataForDate(
+                f"主体 {subject['display_name']} 无可用标签价(需 sina_flow 日涨跌幅或 baostock_hfq)",
+                detail={"subject_id": subject_id})
         ordered_dates = sorted(price_by_date)
 
         stats: list[SignalBacktestStat] = []
@@ -91,7 +93,38 @@ class BacktestService:
         return SignalBacktestResult(
             subject_id=subject_id, source_symbol=subject["source_symbol"],
             display_name=subject["display_name"], as_of=as_of,
-            lookback_start=ordered_dates[0] if ordered_dates else lookback_start, stats=stats)
+            lookback_start=ordered_dates[0] if ordered_dates else lookback_start,
+            stats=stats, price_source=price_note)
+
+    def _price_index(
+        self, subject_id: int, flow_rows: list, lookback_start: str, as_of: str, price_source: str,
+    ) -> tuple[dict[str, int], str]:
+        """标签价序列(date→价微元)+ 用了哪个源的说明。
+
+        hfq(严谨,需回填 baostock_hfq):后复权 close,总回报精确。缺则回退 sina。
+        sina(默认,即时全覆盖):按 change_pct_bp 链式乘成锚不变价指数(复权无关、可复现;
+        除息股息微偏,但信号vs基准对比中抵消)。
+        """
+        if price_source == "hfq":
+            rows = self._obs.series_daily(
+                subject_id=subject_id, sources=[_PRICE_SRC], nonnull_column="price_micro",
+                start_date=lookback_start, end_date=as_of)
+            pbd = {r.trade_date: r.price_micro for r in rows if r.price_micro}
+            if pbd:
+                return pbd, "baostock_hfq(后复权,总回报精确)"
+            # hfq 未回填 → 回退 sina(诚实标注)
+        # sina 默认:change_pct_bp 链式乘成价指数(起点 1e6 微元)
+        idx: dict[str, int] = {}
+        cur = Decimal(1_000_000)
+        for r in flow_rows:
+            if r.change_pct_bp is None:
+                continue
+            cur = cur * (Decimal(10000 + r.change_pct_bp) / Decimal(10000))
+            idx[r.trade_date] = int(cur)
+        note = "sina日涨跌幅链式(复权无关,含股息微偏但对比中抵消)"
+        if price_source == "hfq":
+            note = "hfq未回填,回退 " + note
+        return idx, note
 
 
 def _pct(x: float) -> str:

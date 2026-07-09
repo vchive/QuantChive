@@ -52,15 +52,19 @@ def test_backtest_stock_end_to_end(conn) -> None:
 
     # 40 交易日:价先跌(d0-d19: 100→80)后涨(d20-d39: 80→120),主力全程净流入
     base = _date(2026, 2, 2)
+    prev_price = None
     for i in range(40):
         d = (base + timedelta(days=i)).isoformat()
         price = (100 - i) if i < 20 else (80 + (i - 20) * 2)
-        # 流行(sina):主力净流入 + 价
+        # 日涨跌幅基点(供 sina 默认标签链式);首日 0
+        chg_bp = 0 if prev_price is None else round((price / prev_price - 1) * 10000)
+        prev_price = price
+        # 流行(sina):主力净流入 + 价 + 日涨跌幅
         obs.upsert(subject_id=sid, source_code="sina_flow", trade_date=d, minute_slot="EOD",
                    value_type=ValueType.DAILY_FINAL, granularity="daily", observed_at=now,
                    five_tier={"main_net_cents": 10_00, "super_large_net_cents": 5_00,
                               "large_net_cents": 0, "medium_net_cents": 0, "small_net_cents": 0},
-                   price_micro=price * 1_000_000, source_unit="yuan",
+                   price_micro=price * 1_000_000, change_pct_bp=chg_bp, source_unit="yuan",
                    ingestion_run_id=rid_flow, created_at=now)
         # 价行(hfq):同 subject 同 date 不同 source_code
         obs.upsert(subject_id=sid, source_code="baostock_hfq", trade_date=d, minute_slot="EOD",
@@ -78,12 +82,35 @@ def test_backtest_stock_end_to_end(conn) -> None:
     assert "." in stat.win_rate        # 百分比字符串
 
 
-def test_backtest_no_price_raises(conn) -> None:
-    """只有流没 hfq 价 → 明确报错(需回填 baostock_hfq)。"""
+def test_hfq_falls_back_to_sina(conn) -> None:
+    """price_source=hfq 但未回填 baostock_hfq → 回退 sina 链式,note 标注回退。"""
     sid, _ = SubjectDao(conn).upsert(
         asset_class=AssetClass.A_SHARE, level=SubjectLevel.INSTRUMENT,
         subject_kind=SubjectKind.STOCK, source_code="sina_flow",
-        source_symbol="600001", display_name="缺价股", exchange="SSE")
+        source_symbol="600001", display_name="仅流股", exchange="SSE")
+    obs = ObservationDao(conn)
+    rid = _run(conn, "sina_flow")
+    now = datetime.now(timezone.utc).isoformat()
+    base = _date(2026, 2, 2)
+    for i in range(10):
+        d = (base + timedelta(days=i)).isoformat()
+        obs.upsert(subject_id=sid, source_code="sina_flow", trade_date=d, minute_slot="EOD",
+                   value_type=ValueType.DAILY_FINAL, granularity="daily", observed_at=now,
+                   five_tier={"main_net_cents": 10_00, "super_large_net_cents": 0,
+                              "large_net_cents": 0, "medium_net_cents": 0, "small_net_cents": 0},
+                   price_micro=100_000_000, change_pct_bp=50, source_unit="yuan",
+                   ingestion_run_id=rid, created_at=now)
+    res = BacktestService(conn).backtest_stock(
+        subject_id=sid, kinds=[ACCUMULATION], horizons=(1,), price_source="hfq")
+    assert "回退" in res.price_source and "sina" in res.price_source
+
+
+def test_no_price_data_raises(conn) -> None:
+    """流行既无 hfq 价也无 change_pct_bp → 无法算标签,明确报错。"""
+    sid, _ = SubjectDao(conn).upsert(
+        asset_class=AssetClass.A_SHARE, level=SubjectLevel.INSTRUMENT,
+        subject_kind=SubjectKind.STOCK, source_code="sina_flow",
+        source_symbol="600002", display_name="无涨跌幅股", exchange="SSE")
     obs = ObservationDao(conn)
     rid = _run(conn, "sina_flow")
     now = datetime.now(timezone.utc).isoformat()

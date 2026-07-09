@@ -315,4 +315,5 @@ class SignalBacktestResult(_Base):
     as_of: str
     lookback_start: str
     stats: list[SignalBacktestStat]
+    price_source: str = ""      # 标签价源说明(hfq严谨/sina链式)
     disclaimer: str = "历史条件统计,非未来预测;不构成投资建议"

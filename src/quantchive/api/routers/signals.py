@@ -19,12 +19,13 @@ def signal_backtest(
     horizons: str = Query("1,3,5", description="逗号分隔前向天数"),
     lookback_years: int = Query(5, ge=1, le=16),
     as_of: str | None = Query(None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
+    price_source: str = Query("sina", description="标签价源:sina(默认,即时全覆盖)/hfq(严谨,需回填)"),
     svc: BacktestService = Depends(get_backtest_service),
 ) -> SignalBacktestResult:
     """某股资金流信号历史回测:胜率+Wilson CI+样本数+基准对照(历史统计,非预测)。
 
-    信号只用 as-of 及之前(防前视);标签用 baostock_hfq 前向收益链式乘(防漂移)。
-    样本<30 标注不可靠。end_date/as_of 为 as-of 上界。
+    信号只用 as-of 及之前(防前视);标签默认 sina 日涨跌幅链式(复权无关、即时全覆盖),
+    price_source=hfq 用后复权总回报(需先回填 baostock_hfq)。样本<30 标注不可靠。
     """
     kind_list = (
         [k.strip() for k in kinds.split(",") if k.strip() in SIGNAL_KINDS]
@@ -32,4 +33,4 @@ def signal_backtest(
     hz = tuple(int(h) for h in horizons.split(",") if h.strip().isdigit())
     return svc.backtest_stock(
         subject_id=subject_id, kinds=kind_list, horizons=hz or (1, 3, 5),
-        lookback_years=lookback_years, as_of=as_of)
+        lookback_years=lookback_years, as_of=as_of, price_source=price_source)
