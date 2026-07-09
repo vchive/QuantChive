@@ -87,6 +87,19 @@
 
 ---
 
+## 3.5 阶段A/B 已落地(2026-07 实现)
+
+- **阶段A ✅**:sina 逐股 num=5000 回填近5年全市场四档资金流(5960股,592万行)。
+- **阶段B ✅**:信号回测框架落地。
+  - `service/signal_lib.py`:4种逐日点信号(吸筹/派发背离、连续净流入、超大单异动z-score),纯函数、trailing窗防前视。
+  - `service/backtest_core.py`:前向收益链式乘、Wilson 95%CI 闭式(无scipy)、对照基准、n<30标注不可靠。
+  - `service/backtest_service.py`:**标签源混合** —— sina change_pct_bp 链式乘价指数(默认,0成本即时全市场、复权无关可复现)/ baostock_hfq(可选升级,总回报最严谨,需回填)。股息微偏在信号vs基准对比中抵消(实测两法 edge 一致)。
+  - API `/api/subjects/{id}/signal_backtest` + MCP `signal_backtest`(第16工具) + agent 允许信号历史胜率(仍禁编概率)。
+  - **实测**:baostock hfq 全市场回填要~15h(5-7秒/股,非预估1.5h)→ 故 sina 链式做默认。平安银行"连续净流入"信号 T+1 胜率52% vs基准45%(+7.5pp edge)。
+- 阶段C(信号回测)其实随B一起完成。**剩阶段D(基本面)/E(ML)** 是后续独立工程。
+
+---
+
 ## 4. 关键代码触点(实施时)
 
 | 阶段 | 文件 | 改动 |
