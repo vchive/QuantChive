@@ -271,6 +271,8 @@ async function viewSeries(subjectId, name, metric = "main_net", gran = "daily", 
     setProvenance(data.provenance);
     // —— 信号历史回测面板（折叠,展开才拉,单股快）——
     v.appendChild(buildBacktestPanel(subjectId));
+    // —— 基本面面板（折叠,展开才拉:业绩+三大报表）——
+    v.appendChild(buildFundamentalPanel(subjectId));
   } catch (e) {
     v.innerHTML = "";
     v.appendChild(el("h2", null, `${name} · 资金档位博弈`));
@@ -321,6 +323,53 @@ function buildBacktestPanel(subjectId) {
     } catch (e) {
       body.innerHTML = "";
       body.appendChild(el("div", "hint", `回测不可用：${e.code || ""} ${e.message || e}`));
+    }
+  });
+  return det;
+}
+
+// ---- 基本面面板（折叠,展开懒加载:业绩+三大报表,PIT按公告日）----
+function buildFundamentalPanel(subjectId) {
+  const det = el("details", "agent-trace-det");
+  det.style.marginTop = "12px";
+  det.appendChild(el("summary", null, "📁 基本面（业绩+三大报表 · 按公告日 PIT）"));
+  const body = el("div"); body.style.padding = "8px 0";
+  det.appendChild(body);
+  let loaded = false;
+  det.addEventListener("toggle", async () => {
+    if (!det.open || loaded) return;
+    loaded = true;
+    body.appendChild(el("div", "hint", "加载财报…"));
+    try {
+      const d = await api(`/api/subjects/${subjectId}/fundamentals`);
+      body.innerHTML = "";
+      body.appendChild(el("div", "hint",
+        `报告期 ${d.report_period} · 公告日 ${d.announce_date || "—"} · 来源 东财财报`));
+      // 每节一张两列表(指标 → 值)
+      Object.entries(d.sections || {}).forEach(([sec, items]) => {
+        body.appendChild(el("h2", null, sec));
+        const t = el("table", "grid");
+        t.appendChild(el("thead", null, "<tr><th>指标</th><th>值</th></tr>"));
+        const tb = el("tbody");
+        Object.entries(items).forEach(([k, val]) => {
+          const tr = el("tr");
+          tr.appendChild(el("td", "name", k));
+          // 同比/增速/现金流为负标绿、正标红(A股语义);其余中性
+          const isRatio = k.includes("同比") || k.includes("增");
+          const neg = String(val).startsWith("-");
+          tr.appendChild(el("td", isRatio ? (neg ? "neg" : "pos") : "", val));
+          tb.appendChild(tr);
+        });
+        t.appendChild(tb);
+        body.appendChild(t);
+      });
+      body.appendChild(el("div", "hint",
+        "财报客观数据,非投资建议。三大报表公告日可能为重述日(晚于首披)。"));
+    } catch (e) {
+      body.innerHTML = "";
+      const msg = e.code === "NO_DATA_FOR_DATE"
+        ? "暂无基本面数据(需回填 --target fundamentals)" : `${e.code || ""} ${e.message || e}`;
+      body.appendChild(el("div", "hint", msg));
     }
   });
   return det;
