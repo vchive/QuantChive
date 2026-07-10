@@ -60,13 +60,18 @@ def forward_return_bp(
 
 def forward_return_from_visible(
     price_by_date: dict[str, int], ordered_dates: list[str], visible_date: str, horizon: int,
+    *, max_snap_days: int = 15,
 ) -> int | None:
     """事件可见日(如财报法定披露截止日)之后 horizon 个交易日的前向收益(基点)。
 
     入场点 = 首个 **≥ visible_date** 的交易日(snap;可见日可能是非交易日/节假日)。
     严格防前视:只用入场日及之后。未来不足 horizon / 价缺失 → None。
+
+    防塌缩(审计F1):可见日早于价格窗起点的老事件 → None(否则全部塌缩到窗口首日,
+    重复灌样本+张冠李戴);snap 跨度 > max_snap_days 日历日(本意跨节假日几天)→ None。
     """
-    # 首个 >= visible_date 的交易日(ordered_dates 升序)
+    if not ordered_dates or visible_date < ordered_dates[0]:
+        return None                       # 事件早于价格窗,不可度量(F1 下界)
     entry = None
     for i, d in enumerate(ordered_dates):
         if d >= visible_date:
@@ -74,6 +79,8 @@ def forward_return_from_visible(
             break
     if entry is None:
         return None
+    if _days_between(visible_date, ordered_dates[entry]) > max_snap_days:
+        return None                       # snap 只该跨节假日几天,过远=价格缺段(F1 跨度上限)
     fut = entry + horizon
     if fut >= len(ordered_dates):
         return None
@@ -83,6 +90,10 @@ def forward_return_from_visible(
         return None
     return round((p1 / p0 - 1) * 10000)
 
+
+def _days_between(d0: str, d1: str) -> int:
+    from datetime import date
+    return (date.fromisoformat(d1) - date.fromisoformat(d0)).days
 
 
 def wilson_interval(wins: int, n: int, z: float = 1.96) -> tuple[float, float]:
@@ -107,7 +118,7 @@ def _baseline_win_rate(price_by_date: dict[str, int], ordered_dates: list[str], 
         if not p0 or not p1:
             continue
         tot += 1
-        if p1 > p0:
+        if round((p1 / p0 - 1) * 10000) > 0:   # 与信号胜负同口径(bp>0,审计N5)
             wins += 1
     return wins / tot if tot else 0.0
 

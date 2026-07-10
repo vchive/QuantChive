@@ -1166,6 +1166,10 @@ def backfill_fundamentals(
 
     source: EastMoneyFundamentalSource(有 fetch_statement)。宁缺勿假(无 subject 匹配跳过)。
     announce_date 做 PIT 可见时点。金额整数标度,禁 float。
+
+    ⚠️ 数值轴 PIT 限制(审计F2):akshare 只提供**当前(可能已重述)**数值,重跑会覆盖
+    value_int——历史首披值无法回溯获取。故 value_int 非严格 PIT:日期轴(法定截止日)
+    无泄漏,数值轴可能含重述修正。下游做"无泄漏"声明时必须披露此限制。
     """
     from datetime import datetime as _dt, timezone as _tz
 

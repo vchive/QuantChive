@@ -20,6 +20,7 @@ from quantchive.service.fundamental_signal import (
     PROFIT_TURN_POSITIVE,
     detect_fundamental_signals,
     report_period_deadline,
+    ytd_to_single_quarter,
 )
 
 
@@ -69,6 +70,32 @@ def test_forward_return_no_leak_before_visible() -> None:
     dates = ["2025-04-28", "2025-05-06"]
     px = {"2025-04-28": 100_000_000, "2025-05-06": 100_000_000}
     assert forward_return_from_visible(px, dates, "2025-04-30", 5) is None
+
+
+def test_forward_return_event_before_window_rejected() -> None:
+    """审计F1:可见日早于价格窗起点的老事件 → None(不塌缩到窗口首日)。"""
+    dates = ["2025-04-28", "2025-05-06", "2025-06-03"]
+    px = {d: 100_000_000 for d in dates}
+    assert forward_return_from_visible(px, dates, "2020-04-30", 1) is None
+
+
+def test_forward_return_snap_gap_capped() -> None:
+    """审计F1:snap 跨度过大(价格缺段)→ None(snap 本意只跨节假日几天)。"""
+    dates = ["2025-04-28", "2025-08-01", "2025-09-01"]  # 4月底后价格断档3个月
+    px = {d: 100_000_000 for d in dates}
+    assert forward_return_from_visible(px, dates, "2025-04-30", 1) is None
+
+
+def test_ytd_to_single_quarter() -> None:
+    """审计F3:累计YTD → 单季(同年差分,Q1/跨年原样,缺值None)。"""
+    series = [("2024Q1", 300), ("2024Q2", 700), ("2024Q3", None), ("2024Q4", 1500),
+              ("2025Q1", 400)]
+    sq = ytd_to_single_quarter(series)
+    assert sq[0] == ("2024Q1", 300)        # Q1 原样
+    assert sq[1] == ("2024Q2", 400)        # 700-300
+    assert sq[2] == ("2024Q3", None)       # 缺值
+    assert sq[3] == ("2024Q4", None)       # 前值缺 → None(不冒充)
+    assert sq[4] == ("2025Q1", 400)        # 跨年重置原样
 
 
 # ---------- 端到端 ----------

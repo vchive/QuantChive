@@ -18,6 +18,7 @@ from quantchive.service.fundamental_signal import (
     REVENUE_ACCELERATE,
     ROE_JUMP,
     detect_fundamental_signals,
+    ytd_to_single_quarter,
 )
 
 # 信号 → 驱动它的 performance 指标项
@@ -27,6 +28,9 @@ _KIND_ITEM = {
     REVENUE_ACCELERATE: "revenue_yoy",
     ROE_JUMP: "roe",
 }
+# 累计(YTD)口径项:需转单季再比较(审计F3:roe 是累计level,年内机械递增)。
+# net_profit_yoy/revenue_yoy 是同比增长率(比率),不转(其口径局限见 fundamental_signal N2)。
+_YTD_ITEMS = {"roe"}
 _DEFAULT_HORIZONS = (20, 60)
 
 
@@ -72,9 +76,12 @@ class FundamentalBacktestService:
             item = _KIND_ITEM.get(kind)
             if item is None:
                 continue
-            series = self._period_series(subject_id, item)
+            series = self._period_series(subject_id, item, lookback_start)
+            if item in _YTD_ITEMS:
+                series = ytd_to_single_quarter(series)   # 累计→单季(审计F3)
             hits = detect_fundamental_signals(series, kind=kind, jump_bp=jump_bp)
-            visible = [h.visible_date for h in hits]
+            # 同 kind 同可见日去重(如上年报+本Q1同日截止,审计N4)
+            visible = sorted({h.visible_date for h in hits})
             for h in horizons:
                 st = backtest_visible_events(
                     visible, price_by_date, ordered_dates, kind=kind, horizon=h)
@@ -84,7 +91,10 @@ class FundamentalBacktestService:
             subject_id=subject_id, source_symbol=subj["source_symbol"],
             display_name=subj["display_name"], as_of=as_of,
             lookback_start=ordered_dates[0] if ordered_dates else lookback_start,
-            stats=stats, price_source="基本面信号(可见日=法定披露截止日,保守PIT);sina链式价")
+            stats=stats,
+            price_source=("基本面信号(可见日=法定披露截止日,保守PIT;逾期披露尾部除外);"
+                          "⚠️数值为最新重述口径非首披值(数据源限制,日期轴无泄漏、数值轴可能含重述);"
+                          "sina链式价"))
 
     def _latest_flow_date(self, subject_id: int) -> str | None:
         row = self._conn.execute(
@@ -93,13 +103,27 @@ class FundamentalBacktestService:
             (subject_id,)).fetchone()
         return row[0] if row else None
 
-    def _period_series(self, subject_id: int, item: str) -> list[tuple[str, int | None]]:
-        """某 performance 指标按报告期升序序列。"""
+    def _period_series(self, subject_id: int, item: str, lookback_start: str) -> list[tuple[str, int | None]]:
+        """某 performance 指标按报告期升序序列。
+
+        下界(审计F1):只取可见日 ≥ lookback_start 的报告期(否则老事件在价格窗外,
+        forward_return_from_visible 会拒但仍白算)。多留 1 期给单季/环比比较用前值。
+        """
+        from quantchive.service.fundamental_signal import report_period_deadline
         rows = self._conn.execute(
             "SELECT report_period, value_int FROM fundamental_item "
             "WHERE subject_id=? AND statement='performance' AND item=? "
             "ORDER BY report_period", (subject_id, item)).fetchall()
-        return [(r[0], r[1]) for r in rows]
+        full = [(r[0], r[1]) for r in rows]
+        # 保留可见日在窗内的期,外加紧邻前一期(供 prev/cur 比较,其自身不产事件)
+        keep_from = 0
+        for i, (period, _v) in enumerate(full):
+            if report_period_deadline(period) >= lookback_start:
+                keep_from = max(0, i - 1)
+                break
+        else:
+            return []
+        return full[keep_from:]
 
 
 def _to_dto_stat(st) -> SignalBacktestStat:
