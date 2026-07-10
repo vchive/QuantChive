@@ -230,6 +230,21 @@ def fundamental_signal_backtest(subject_id: int, kinds: str | None = None) -> di
             return _err(e)
 
 
+def market_fundamental_signal_stats() -> dict:
+    """全市场基本面信号历史统计(净利转正/加速、ROE跳升、营收加速 × 前向20/60日)。
+
+    单股事件稀疏样本不足时用这个:全市场近5年数千次事件聚合,Wilson CI 收窄到统计可信。
+    beats_baseline=true 表示 CI 下界高于基准(统计显著优于随便买)。预计算秒读。
+    历史条件统计非预测;财务数值为最新重述口径(数据源限制)。
+    """
+    from quantchive.service.market_signal_service import read_market_stats
+    with _readonly_conn() as conn:
+        try:
+            return read_market_stats(conn)
+        except QueryError as e:
+            return _err(e)
+
+
 def flow_topology(trade_date: str | None = None, tier: str = "main",
                   top_sectors: int = 20) -> dict:
     """资金流向拓扑:大盘→行业(TopN)桑基。tier: main|super_large|large|medium|small。"""
@@ -293,7 +308,7 @@ _TOOLS = [
     rank_stocks_in_sector, scan_market_stocks, rank_etf, get_series,
     get_tiers_series, flow_topology, sector_trends, get_series_range,
     get_series_batch, fund_nav, signal_backtest, describe_fundamentals,
-    fundamental_signal_backtest,
+    fundamental_signal_backtest, market_fundamental_signal_stats,
 ]
 for _fn in _TOOLS:
     mcp.tool()(_fn)

@@ -41,7 +41,8 @@ _log = get_logger(__name__)
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="quantchive-collect")
     parser.add_argument("--target", default="sector",
-                        choices=["sector", "stock", "etf", "members", "backfill", "derive-sectors", "scan-signals", "fundamentals"])
+                        choices=["sector", "stock", "etf", "members", "backfill", "derive-sectors",
+                                 "scan-signals", "fundamentals", "fund-signal-stats"])
     parser.add_argument("--sector-type", default="industry,concept")
     parser.add_argument("--scope", default="stock", choices=["stock"],
                         help="backfill: 回填个股历史")
@@ -93,6 +94,18 @@ def main(argv: list[str] | None = None) -> None:
         _log.info("信号扫描完成", extra={"context": summary})
         print(f"scan-signals: {summary.get('trade_date')} · 扫描 {summary.get('scanned')}股 "
               f"· 命中 {summary.get('hits')}(信号×股)")
+        sys.exit(0)
+
+    # fund-signal-stats：全市场基本面信号聚合统计(precompute,agent/前端秒读)
+    if args.target == "fund-signal-stats":
+        from quantchive.service.market_signal_service import compute_market_fundamental_stats
+
+        def _gprog(done, total, name):
+            print(f"  聚合 {done}股…", flush=True)
+        summary = compute_market_fundamental_stats(conn, progress=_gprog)
+        _log.info("全市场基本面信号统计完成", extra={"context": summary})
+        print(f"fund-signal-stats: as_of {summary.get('as_of')} · {summary.get('stocks')}股 "
+              f"· {summary.get('stats_written')}条统计 · 事件 {summary.get('events')}")
         sys.exit(0)
 
     # fundamentals：基本面回填（业绩+三大报表,东财 akshare,announce_date PIT）

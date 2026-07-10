@@ -60,13 +60,14 @@ def seeded_db(tmp_path, monkeypatch):
 
 
 def test_tools_registered() -> None:
-    """18 个工具全注册。"""
+    """19 个工具全注册。"""
     tools = asyncio.run(mcp_server.mcp.list_tools())
-    assert len(tools) == 18
+    assert len(tools) == 19
     names = {t.name for t in tools}
     assert "scan_market_stocks" in names and "get_series_range" in names
     assert "search_subject" in names and "signal_backtest" in names
     assert "describe_fundamentals" in names and "fundamental_signal_backtest" in names
+    assert "market_fundamental_signal_stats" in names
 
 
 def test_list_subjects_tool(seeded_db) -> None:

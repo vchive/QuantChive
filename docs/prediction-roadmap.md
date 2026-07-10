@@ -98,6 +98,14 @@
   - **实测**:baostock hfq 全市场回填要~15h(5-7秒/股,非预估1.5h)→ 故 sina 链式做默认。平安银行"连续净流入"信号 T+1 胜率52% vs基准45%(+7.5pp edge)。
 - 阶段C(信号回测)其实随B一起完成。**剩阶段D(基本面)/E(ML)** 是后续独立工程。
 
+## 3.6 阶段D + 基本面信号 + 全市场聚合 已落地(2026-07 实现)
+
+- **阶段D ✅ 基本面接入**:东财 akshare 业绩+三大报表(yjbb/zcfz/lrb/xjll),统一 KV 表 `fundamental_item`,近4年 217万行项。`describe_fundamentals`(第17工具)+ 个股详情财报面板。
+  - ⚠️ **announce_date 语义(实测)**:业绩报表≈首披日;三大报表≈最新重述日(常晚1年+,跨期不一致)→ 不能做基本面事件 PIT。
+- **基本面信号回测 ✅**(阶段B×D 融合):净利增速转正/加速、ROE跳升(单季化)、营收加速。可见时点=**法定披露截止日**(Q1→4/30、H1→8/31、Q3→10/31、年报→次年4/30)——保守 PIT 代理。`fundamental_signal_backtest`(第18工具)。
+  - **4视角对抗审计(17发现→3必修全修)**:F1 snap无下界(窗外老事件塌缩,已修:窗下界+15日跨度上限);F3 ROE累计YTD口径假触发(已修:ytd_to_single_quarter);F2 akshare只给最新重述值→数值轴PIT不可修,显式披露"数值为最新重述口径";M4 逾期披露尾部有界前视(已标注)。
+- **全市场聚合统计 ✅**:单股事件稀疏(n=1-2)→ 全市场5年聚合(净利转正6722次/加速14837次/营收加速5032次/ROE跳升853次),Wilson CI 收窄到统计可信。`market_signal_stat` 表 precompute(CLI `--target fund-signal-stats`,42秒),`market_fundamental_signal_stats`(第19工具)秒读。beats_baseline=CI下界>基准(统计显著)。
+
 ---
 
 ## 4. 关键代码触点(实施时)

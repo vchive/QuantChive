@@ -250,3 +250,23 @@ CREATE TABLE IF NOT EXISTS fundamental_item (
     UNIQUE (subject_id, report_period, statement, item)
 );
 CREATE INDEX IF NOT EXISTS idx_fund_pit ON fundamental_item (subject_id, statement, announce_date);
+
+-- ============================================================================
+-- 全市场基本面信号聚合统计(precompute):单股事件稀疏→全市场聚合让 CI 收窄到统计可信
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS market_signal_stat (
+    stat_id        INTEGER PRIMARY KEY,
+    signal_kind    TEXT NOT NULL,        -- profit_turn_positive 等
+    horizon        INTEGER NOT NULL,     -- 前向交易日数
+    as_of          TEXT NOT NULL,        -- 计算所用数据上界
+    trigger_count  INTEGER NOT NULL,
+    win_count      INTEGER NOT NULL,
+    avg_return_bp  INTEGER NOT NULL,     -- 平均前向收益(基点)
+    median_return_bp INTEGER NOT NULL,
+    win_rate_bp    INTEGER NOT NULL,     -- 胜率(万分比整数,禁float)
+    wilson_low_bp  INTEGER NOT NULL,
+    wilson_high_bp INTEGER NOT NULL,
+    baseline_bp    INTEGER NOT NULL,     -- 无条件基准胜率(万分比)
+    computed_at    TEXT NOT NULL,
+    UNIQUE (signal_kind, horizon)        -- 重算覆盖
+);
