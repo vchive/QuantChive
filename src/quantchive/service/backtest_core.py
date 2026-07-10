@@ -58,6 +58,33 @@ def forward_return_bp(
     return round((p1 / p0 - 1) * 10000)
 
 
+def forward_return_from_visible(
+    price_by_date: dict[str, int], ordered_dates: list[str], visible_date: str, horizon: int,
+) -> int | None:
+    """事件可见日(如财报法定披露截止日)之后 horizon 个交易日的前向收益(基点)。
+
+    入场点 = 首个 **≥ visible_date** 的交易日(snap;可见日可能是非交易日/节假日)。
+    严格防前视:只用入场日及之后。未来不足 horizon / 价缺失 → None。
+    """
+    # 首个 >= visible_date 的交易日(ordered_dates 升序)
+    entry = None
+    for i, d in enumerate(ordered_dates):
+        if d >= visible_date:
+            entry = i
+            break
+    if entry is None:
+        return None
+    fut = entry + horizon
+    if fut >= len(ordered_dates):
+        return None
+    p0 = price_by_date.get(ordered_dates[entry])
+    p1 = price_by_date.get(ordered_dates[fut])
+    if not p0 or not p1:
+        return None
+    return round((p1 / p0 - 1) * 10000)
+
+
+
 def wilson_interval(wins: int, n: int, z: float = 1.96) -> tuple[float, float]:
     """二项比例 Wilson 95% 置信区间(闭式,纯 python)。n=0 → (0,0)。"""
     if n <= 0:
@@ -90,12 +117,29 @@ def backtest_signal(
     *, kind: str, horizon: int,
 ) -> BacktestStat:
     """回测一类信号在某 horizon 的历史表现:胜率+Wilson CI+均值/中位数+基准对照。"""
-    returns: list[int] = []
-    for sig in signals:
-        r = forward_return_bp(price_by_date, sig.trade_date, ordered_dates, horizon)
-        if r is not None:
-            returns.append(r)
+    returns = [r for sig in signals
+               if (r := forward_return_bp(price_by_date, sig.trade_date, ordered_dates, horizon)) is not None]
+    return _stats_from_returns(returns, price_by_date, ordered_dates, kind=kind, horizon=horizon)
 
+
+def backtest_visible_events(
+    visible_dates: list[str], price_by_date: dict[str, int], ordered_dates: list[str],
+    *, kind: str, horizon: int,
+) -> BacktestStat:
+    """回测"可见日事件"(如基本面信号,可见日=法定披露截止日)在某 horizon 的表现。
+
+    入场 snap 到首个 ≥可见日的交易日(防前视),前向 horizon 交易日收益。基准同 backtest_signal。
+    """
+    returns = [r for vd in visible_dates
+               if (r := forward_return_from_visible(price_by_date, ordered_dates, vd, horizon)) is not None]
+    return _stats_from_returns(returns, price_by_date, ordered_dates, kind=kind, horizon=horizon)
+
+
+def _stats_from_returns(
+    returns: list[int], price_by_date: dict[str, int], ordered_dates: list[str],
+    *, kind: str, horizon: int,
+) -> BacktestStat:
+    """前向收益列表 → 统计(胜率/Wilson CI/均值/中位/基准/可靠)。信号与基本面共用。"""
     n = len(returns)
     wins = sum(1 for r in returns if r > 0)
     win_rate = wins / n if n else 0.0

@@ -211,6 +211,25 @@ def describe_fundamentals(subject_id: int, as_of: str | None = None) -> dict:
             return _err(e)
 
 
+def fundamental_signal_backtest(subject_id: int, kinds: str | None = None) -> dict:
+    """某股基本面信号历史回测(净利增速转正/加速、ROE跳升、营收加速)。
+
+    可见时点=法定披露截止日(保守 PIT,不用不可靠的公告日),前向 20/60 交易日胜率+
+    Wilson置信区间+基准对照。基本面事件稀疏,样本常不足(n<30)必如实说不可靠。
+    历史条件统计,非预测。
+    """
+    from quantchive.service.fundamental_backtest_service import FundamentalBacktestService
+    from quantchive.service.fundamental_signal import FUND_SIGNAL_KINDS
+    kl = ([k.strip() for k in kinds.split(",") if k.strip() in FUND_SIGNAL_KINDS]
+          if kinds else list(FUND_SIGNAL_KINDS))
+    with _readonly_conn() as conn:
+        try:
+            return _dump(FundamentalBacktestService(conn).backtest_stock(
+                subject_id=subject_id, kinds=kl))
+        except QueryError as e:
+            return _err(e)
+
+
 def flow_topology(trade_date: str | None = None, tier: str = "main",
                   top_sectors: int = 20) -> dict:
     """资金流向拓扑:大盘→行业(TopN)桑基。tier: main|super_large|large|medium|small。"""
@@ -274,6 +293,7 @@ _TOOLS = [
     rank_stocks_in_sector, scan_market_stocks, rank_etf, get_series,
     get_tiers_series, flow_topology, sector_trends, get_series_range,
     get_series_batch, fund_nav, signal_backtest, describe_fundamentals,
+    fundamental_signal_backtest,
 ]
 for _fn in _TOOLS:
     mcp.tool()(_fn)
