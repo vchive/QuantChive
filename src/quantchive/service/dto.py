@@ -317,3 +317,15 @@ class SignalBacktestResult(_Base):
     stats: list[SignalBacktestStat]
     price_source: str = ""      # 标签价源说明(hfq严谨/sina链式)
     disclaimer: str = "历史条件统计,非未来预测;不构成投资建议"
+
+
+class FundamentalResult(_Base):
+    """某股某报告期基本面(业绩+三大报表,PIT 按 announce_date;值字符串,禁前端float)。"""
+
+    subject_id: int
+    source_symbol: str
+    display_name: str
+    report_period: str
+    announce_date: str | None
+    sections: dict[str, dict[str, str]]   # {'业绩':{'eps':'1.41',...},'资产负债':{...},...}
+    provenance: DataProvenance

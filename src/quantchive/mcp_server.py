@@ -32,6 +32,7 @@ from quantchive.service.fund_lookup_service import FundLookupService
 from quantchive.service.query_service import QueryService
 from quantchive.service.backtest_service import BacktestService
 from quantchive.service.signal_lib import SIGNAL_KINDS
+from quantchive.service.fundamental_service import FundamentalService
 mcp = FastMCP("quantchive")
 
 
@@ -198,6 +199,18 @@ def signal_backtest(subject_id: int, kinds: str | None = None, horizons: str = "
             return _err(e)
 
 
+def describe_fundamentals(subject_id: int, as_of: str | None = None) -> dict:
+    """某股基本面(业绩+三大报表:EPS/ROE/净利同比/营收/毛利率/总资产/负债率/经营现金流等)。
+
+    按公告日 PIT(as_of 缺省=最新已披露报告期)。客观转述财报数字,不臆测估值/买卖。
+    """
+    with _readonly_conn() as conn:
+        try:
+            return _dump(FundamentalService(conn).latest(subject_id=subject_id, as_of=as_of))
+        except QueryError as e:
+            return _err(e)
+
+
 def flow_topology(trade_date: str | None = None, tier: str = "main",
                   top_sectors: int = 20) -> dict:
     """资金流向拓扑:大盘→行业(TopN)桑基。tier: main|super_large|large|medium|small。"""
@@ -260,7 +273,7 @@ _TOOLS = [
     search_subject, list_subjects, describe_capability, market_overview, rank_sectors,
     rank_stocks_in_sector, scan_market_stocks, rank_etf, get_series,
     get_tiers_series, flow_topology, sector_trends, get_series_range,
-    get_series_batch, fund_nav, signal_backtest,
+    get_series_batch, fund_nav, signal_backtest, describe_fundamentals,
 ]
 for _fn in _TOOLS:
     mcp.tool()(_fn)

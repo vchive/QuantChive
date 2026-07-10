@@ -231,3 +231,22 @@ CREATE TABLE IF NOT EXISTS signal_hit (
     UNIQUE (subject_id, trade_date, kind)
 );
 CREATE INDEX IF NOT EXISTS idx_signal_hit_scan ON signal_hit (kind, trade_date, strength);
+
+-- ============================================================================
+-- 阶段D 基本面：业绩报表 + 三大报表(资产负债/利润/现金流)统一 KV,announce_date 做 PIT
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS fundamental_item (
+    item_id       INTEGER PRIMARY KEY,
+    subject_id    INTEGER NOT NULL REFERENCES subject(subject_id),
+    report_period TEXT NOT NULL,          -- '2024Q4' 报告期
+    announce_date TEXT,                   -- 公告日(可见时点,PIT)
+    statement     TEXT NOT NULL,          -- performance|balance|income|cashflow
+    item          TEXT NOT NULL,          -- 规范项码 eps/total_assets/net_profit/ocf...
+    value_int     INTEGER,                -- 整数标度(禁float);NULL=缺值不冒充0
+    unit          TEXT NOT NULL,          -- cents|bp|micro
+    source_code   TEXT NOT NULL REFERENCES data_source(source_code),
+    ingestion_run_id INTEGER,
+    created_at    TEXT NOT NULL,
+    UNIQUE (subject_id, report_period, statement, item)
+);
+CREATE INDEX IF NOT EXISTS idx_fund_pit ON fundamental_item (subject_id, statement, announce_date);

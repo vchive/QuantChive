@@ -24,6 +24,8 @@ _SEED_SOURCES = [
     # spec005：百度当日四档gross(校验探针,无头浏览器,验证后启用)；tushare深历史备源(预留,需token)
     ("baidu_flow", "百度资金流", "baidu", 1, 0, "yi", "baidu_flow_src.BaiduFlowSource", 0),
     ("tushare_flow", "Tushare资金流", "tushare", 1, 1, "yuan", "tushare_flow_src.TushareFlowSource", 0),
+    # 阶段D：东财基本面(业绩+三大报表,akshare,免费十几年,announce_date 做 PIT)
+    ("eastmoney_fin", "东财基本面", "eastmoney", 0, 0, "yuan", "fundamental_src.EastMoneyFundamentalSource", 1),
 ]
 
 # spec002 品种（预留位）

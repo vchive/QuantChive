@@ -41,7 +41,7 @@ _log = get_logger(__name__)
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="quantchive-collect")
     parser.add_argument("--target", default="sector",
-                        choices=["sector", "stock", "etf", "members", "backfill", "derive-sectors", "scan-signals"])
+                        choices=["sector", "stock", "etf", "members", "backfill", "derive-sectors", "scan-signals", "fundamentals"])
     parser.add_argument("--sector-type", default="industry,concept")
     parser.add_argument("--scope", default="stock", choices=["stock"],
                         help="backfill: 回填个股历史")
@@ -52,6 +52,10 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--days", type=int, default=30, help="backfill: 回填交易日数")
     parser.add_argument("--limit", type=int, default=None,
                         help="members/backfill: 限制主体数（调试）")
+    parser.add_argument("--periods", default=None,
+                        help="fundamentals: 逗号分隔报告期(如 2023Q4,2024Q4)")
+    parser.add_argument("--years", type=int, default=3,
+                        help="fundamentals: 近N年季末(--periods 未给时生成)")
     args = parser.parse_args(argv)
 
     settings = get_settings()
@@ -89,6 +93,27 @@ def main(argv: list[str] | None = None) -> None:
         _log.info("信号扫描完成", extra={"context": summary})
         print(f"scan-signals: {summary.get('trade_date')} · 扫描 {summary.get('scanned')}股 "
               f"· 命中 {summary.get('hits')}(信号×股)")
+        sys.exit(0)
+
+    # fundamentals：基本面回填（业绩+三大报表,东财 akshare,announce_date PIT）
+    if args.target == "fundamentals":
+        from quantchive.datasource.fundamental_src import EastMoneyFundamentalSource
+        from quantchive.service.ingest_service import backfill_fundamentals
+        if args.periods:
+            periods = [p.strip() for p in args.periods.split(",") if p.strip()]
+        else:
+            import datetime as _dt
+            y0 = _dt.date.today().year
+            periods = [f"{y}Q{q}" for y in range(y0 - args.years, y0 + 1) for q in (1, 2, 3, 4)]
+
+        def _fprog(done, total, name):
+            print(f"  基本面 {done}/{total} … {name}", flush=True)
+        summary = backfill_fundamentals(
+            conn, source=EastMoneyFundamentalSource(), periods=periods, progress=_fprog)
+        _log.info("基本面回填完成", extra={"context": summary})
+        print(f"fundamentals: {summary['periods']}期×{summary['statements']}表 · "
+              f"行项 {summary['items_written']} · 跳过无主体 {summary['skipped_no_subject']} "
+              f"· 失败 {summary['failed']}")
         sys.exit(0)
 
     # backfill：历史回填（逐主体自动提交，不包大事务）

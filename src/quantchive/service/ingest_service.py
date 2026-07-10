@@ -1158,3 +1158,73 @@ def run_cross_source_validation(
             "checked": checked, "divergences": divergences}
 
 
+def backfill_fundamentals(
+    conn, *, source, periods: list[str], statements: list[str] | None = None,
+    source_code: str = "eastmoney_fin", progress: "object | None" = None,
+) -> dict:
+    """基本面回填(阶段D):遍历 报告期×报表 → 东财取全市场行项 → code→subject_id → 幂等落库。
+
+    source: EastMoneyFundamentalSource(有 fetch_statement)。宁缺勿假(无 subject 匹配跳过)。
+    announce_date 做 PIT 可见时点。金额整数标度,禁 float。
+    """
+    from datetime import datetime as _dt, timezone as _tz
+
+    from quantchive.datasource.base import DataSourceError
+    from quantchive.models.enums import Caliber, RunStatus, RunType
+
+    _ALL = ["performance", "balance", "income", "cashflow"]
+    statements = statements or _ALL
+    run_dao = RunDao(conn)
+    now_iso = _dt.now(_tz.utc).isoformat()
+
+    # code → subject_id(全市场股一次建表)
+    code_to_sid = {
+        r[1]: r[0] for r in conn.execute(
+            "SELECT subject_id, source_symbol FROM subject WHERE subject_kind='stock'").fetchall()}
+
+    written = 0
+    skipped_no_subject = 0
+    failed = 0
+    total = len(periods) * len(statements)
+    done = 0
+    for period in periods:
+        for stmt in statements:
+            done += 1
+            run_id = run_dao.start(
+                source_code=source_code, run_type=RunType.EOD_BACKFILL, caliber=Caliber.EASTMONEY,
+                trade_date=period, minute_slot=stmt, adapter_version="fundamental-v1",
+                subject_scope=f"{period}/{stmt}", asset_class_code="a_share")
+            try:
+                items = source.fetch_statement(statement=stmt, report_period=period)
+            except DataSourceError:
+                failed += 1
+                run_dao.finish(run_id, status=RunStatus.FAILED, subjects_ok=0, subjects_failed=1)
+                continue
+            n = 0
+            for it in items:
+                sid = code_to_sid.get(it.code)
+                if sid is None:
+                    skipped_no_subject += 1
+                    continue
+                conn.execute(
+                    """INSERT INTO fundamental_item
+                       (subject_id, report_period, announce_date, statement, item,
+                        value_int, unit, source_code, ingestion_run_id, created_at)
+                       VALUES (?,?,?,?,?,?,?,?,?,?)
+                       ON CONFLICT(subject_id, report_period, statement, item) DO UPDATE SET
+                         announce_date=excluded.announce_date, value_int=excluded.value_int,
+                         unit=excluded.unit, ingestion_run_id=excluded.ingestion_run_id,
+                         created_at=excluded.created_at""",
+                    (sid, it.report_period, it.announce_date, it.statement, it.item,
+                     it.value_int, it.unit, source_code, run_id, now_iso))
+                n += 1
+                written += 1
+            run_dao.finish(run_id, status=RunStatus.SUCCESS, subjects_ok=n, subjects_failed=0)
+            if progress:
+                progress(done, total, f"{period}/{stmt}")
+
+    return {"periods": len(periods), "statements": len(statements),
+            "items_written": written, "skipped_no_subject": skipped_no_subject, "failed": failed}
+
+
+

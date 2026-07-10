@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query
 
-from quantchive.api.deps import get_query_service
+from quantchive.api.deps import get_conn, get_query_service
 from quantchive.models.enums import SortField
-from quantchive.service.dto import BatchSeriesResult, SubjectSeriesResult
+from quantchive.service.dto import BatchSeriesResult, FundamentalResult, SubjectSeriesResult
 from quantchive.service.query_service import QueryService
 
 router = APIRouter(prefix="/api/subjects", tags=["subjects"])
@@ -53,3 +53,14 @@ def get_subjects_series_batch(
     ids = [int(x) for x in subject_ids.split(",") if x.strip()]
     return svc.get_subjects_series_batch(
         subject_ids=ids, metric=metric, start_date=start_date, end_date=end_date)
+
+
+@router.get("/{subject_id}/fundamentals", response_model=FundamentalResult)
+def get_fundamentals(
+    subject_id: int,
+    as_of: str | None = Query(None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
+    conn=Depends(get_conn),
+) -> FundamentalResult:
+    """某股基本面(业绩+三大报表,PIT 按 announce_date)。as_of 缺省=最新已披露。"""
+    from quantchive.service.fundamental_service import FundamentalService
+    return FundamentalService(conn).latest(subject_id=subject_id, as_of=as_of)
