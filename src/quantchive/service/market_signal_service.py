@@ -138,8 +138,11 @@ def compute_market_fundamental_stats(
             "events": {f"{k}@{h}": len(v) for (k, h), v in returns.items()}}
 
 
-def _upsert_stats(conn, returns, base_wins, base_tot, as_of, now_iso) -> int:
-    """(kind,horizon)→returns 累积 → Wilson/中位/基准 → upsert market_signal_stat。"""
+def _upsert_stats(conn, returns, base_wins, base_tot, as_of, now_iso, baseline_fn=None) -> int:
+    """(kind,horizon)→returns 累积 → Wilson/中位/基准 → upsert market_signal_stat。
+
+    baseline_fn(kind,h)→float 覆盖默认 pooled 基准(组合统计用:对照=基本面单独胜率)。
+    """
     written = 0
     for (kind, h), rs in returns.items():
         n = len(rs)
@@ -147,7 +150,10 @@ def _upsert_stats(conn, returns, base_wins, base_tot, as_of, now_iso) -> int:
         low, high = wilson_interval(wins, n)
         srt = sorted(rs)
         median = 0 if not srt else (srt[n // 2] if n % 2 else round((srt[n // 2 - 1] + srt[n // 2]) / 2))
-        baseline = (base_wins[h] / base_tot[h]) if base_tot[h] else 0.0
+        if baseline_fn is not None:
+            baseline = baseline_fn(kind, h)
+        else:
+            baseline = (base_wins[h] / base_tot[h]) if base_tot[h] else 0.0
         conn.execute(
             """INSERT INTO market_signal_stat
                (signal_kind, horizon, as_of, trigger_count, win_count, avg_return_bp,
@@ -256,10 +262,133 @@ _FLOW_DISCLOSURE = ("历史条件统计,非预测。同股同信号已做非重�
                     "但同日多股触发受共同市场因素影响,有效独立样本低于名义n;不构成投资建议")
 
 
-def read_market_stats(conn: sqlite3.Connection, *, family: str | None = None) -> dict:
-    """读全市场信号统计(agent/端点秒读)。family: 'flow'|'fundamental'|None(全部)。
+_COMBO_WINDOW = 5   # 资金流确认条件窗:入场日前5个交易日(含入场日),trailing 无前视
 
-    披露按信号族:基本面带重述口径披露;资金流带去重+同日聚簇披露。
+
+def compute_market_combo_stats(
+    conn: sqlite3.Connection, *, horizons: tuple[int, ...] = (20, 60),
+    jump_bp: int = 2000, progress: "object | None" = None,
+) -> dict:
+    """组合条件统计(阶段E-E1):基本面事件 × 近5交易日资金流确认 → 叠加有没有增益。
+
+    这是 ML(E2)的先决问题:若组合不比基本面单独更强,线性组合弱信号变不出alpha。
+    对照=**基本面信号单独**的胜率(同 pass 同 as_of,存 baseline_bp)→ beats_baseline
+    直接回答"叠加是否显著增益"。多重检验(4×4×2=32组合)在 disclosure 披露。
+    """
+    from bisect import bisect_left
+    from collections import defaultdict
+
+    now_iso = _dt.now(_tz.utc).isoformat()
+    max_h = max(horizons)
+
+    # 基本面 performance 序列(同 fundamental 版)
+    fund_rows = conn.execute(
+        "SELECT subject_id, item, report_period, value_int FROM fundamental_item "
+        "WHERE statement='performance' AND item IN ('net_profit_yoy','revenue_yoy','roe') "
+        "ORDER BY subject_id, item, report_period").fetchall()
+    fund_by_sid: dict[int, dict[str, list[tuple[str, int | None]]]] = {}
+    for sid, grp in groupby(fund_rows, key=lambda r: r[0]):
+        d: dict[str, list[tuple[str, int | None]]] = {}
+        for _, item, period, v in grp:
+            d.setdefault(item, []).append((period, v))
+        fund_by_sid[sid] = d
+
+    as_of_row = conn.execute(
+        "SELECT MAX(trade_date) FROM observation WHERE source_code='sina_flow' "
+        "AND value_type='daily_final'").fetchone()
+    as_of = as_of_row[0] if as_of_row else None
+    if not as_of:
+        return {"stats_written": 0, "reason": "无行情"}
+
+    run_id = RunDao(conn).start(
+        source_code="sina_flow", run_type=RunType.MARKET_AGGREGATE, caliber=Caliber.EASTMONEY,
+        trade_date=as_of, minute_slot="STATS", adapter_version="combo-signal-stats-v1",
+        subject_scope="market_combo_signals", asset_class_code="a_share")
+
+    fund_returns: dict[tuple[str, int], list[int]] = defaultdict(list)   # 对照(基本面单独)
+    combo_returns: dict[tuple[str, int], list[int]] = defaultdict(list)
+
+    cur = conn.execute(
+        "SELECT subject_id, trade_date, main_net_cents, super_large_net_cents, "
+        "price_micro, change_pct_bp FROM observation "
+        "WHERE source_code='sina_flow' AND value_type='daily_final' "
+        "AND main_net_cents IS NOT NULL AND change_pct_bp IS NOT NULL "
+        "ORDER BY subject_id, trade_date")
+    stocks_done = 0
+    for sid, grp in groupby(cur, key=lambda r: r[0]):
+        fund = fund_by_sid.get(sid)
+        rows: list[_FlowRow] = []
+        price_by_date: dict[str, int] = {}
+        acc = Decimal(1_000_000)
+        for _, d, main, slarge, px, chg in grp:
+            rows.append(_FlowRow(d, px, main, slarge))
+            acc = acc * (Decimal(10000 + chg) / Decimal(10000))
+            price_by_date[d] = int(acc)
+        if not fund:
+            continue                         # 组合只统计有基本面数据的股
+        ordered = sorted(price_by_date)
+        if len(ordered) < max_h + 1:
+            continue
+
+        # 资金流命中日集合(条件方,不去重)
+        flow_dates = {k: {h.trade_date for h in detect_signals(rows, kind=k)}
+                      for k in FLOW_SIGNAL_KINDS}
+
+        for fund_kind in FUND_SIGNAL_KINDS:
+            item = _KIND_ITEM[fund_kind]
+            series = fund.get(item)
+            if not series:
+                continue
+            if item in _YTD_ITEMS:
+                series = ytd_to_single_quarter(series)
+            hits = detect_fundamental_signals(series, kind=fund_kind, jump_bp=jump_bp)
+            for vd in sorted({x.visible_date for x in hits}):
+                returns_by_h = {}
+                for h in horizons:
+                    r = forward_return_from_visible(price_by_date, ordered, vd, h)
+                    if r is not None:
+                        returns_by_h[h] = r
+                if not returns_by_h:
+                    continue
+                for h, r in returns_by_h.items():
+                    fund_returns[(fund_kind, h)].append(r)
+                # 入场日 trailing 窗内有该资金流信号 → 计入组合
+                ei = bisect_left(ordered, vd)
+                if ei >= len(ordered):
+                    continue
+                window_dates = set(ordered[max(0, ei - _COMBO_WINDOW): ei + 1])
+                for flow_kind in FLOW_SIGNAL_KINDS:
+                    if flow_dates[flow_kind] & window_dates:
+                        ck = f"{fund_kind}+{flow_kind}"
+                        for h, r in returns_by_h.items():
+                            combo_returns[(ck, h)].append(r)
+        stocks_done += 1
+        if progress and stocks_done % 1000 == 0:
+            progress(stocks_done, 0, "")
+
+    # 对照:基本面单独胜率(同 pass 同 as_of)
+    fund_wr = {(k, h): (sum(1 for r in rs if r > 0) / len(rs) if rs else 0.0)
+               for (k, h), rs in fund_returns.items()}
+
+    def _baseline(kind: str, h: int) -> float:
+        return fund_wr.get((kind.split("+")[0], h), 0.0)
+
+    written = _upsert_stats(conn, dict(combo_returns), {}, {}, as_of, now_iso,
+                            baseline_fn=_baseline)
+    RunDao(conn).finish(run_id, status=RunStatus.SUCCESS, subjects_ok=written, subjects_failed=0)
+    return {"as_of": as_of, "stocks": stocks_done, "stats_written": written,
+            "events": {f"{k}@{h}": len(v) for (k, h), v in combo_returns.items()}}
+
+
+_COMBO_DISCLOSURE = ("历史条件统计,非预测。组合=基本面事件且入场前5交易日内有该资金流信号;"
+                     "对照(baseline)=**该基本面信号单独**的胜率,beats_baseline=叠加有显著增益;"
+                     "32个组合多重检验下单个显著需谨慎(期望~1-2个假阳性),多horizon同向更可信;不构成投资建议")
+
+
+def read_market_stats(conn: sqlite3.Connection, *, family: str | None = None) -> dict:
+    """读全市场信号统计(agent/端点秒读)。family: 'flow'|'fundamental'|'combo'|None(全部)。
+
+    披露按信号族:基本面带重述口径披露;资金流带去重+同日聚簇披露;组合带多重检验披露。
     """
     rows = conn.execute(
         "SELECT signal_kind, horizon, as_of, trigger_count, win_count, avg_return_bp, "
@@ -271,8 +400,11 @@ def read_market_stats(conn: sqlite3.Connection, *, family: str | None = None) ->
     elif family == "fundamental":
         rows = [r for r in rows if r[0] in FUND_SIGNAL_KINDS]
         disclosure = _DISCLOSURE
+    elif family == "combo":
+        rows = [r for r in rows if "+" in r[0]]
+        disclosure = _COMBO_DISCLOSURE
     else:
-        disclosure = _DISCLOSURE + " | 资金流信号: " + _FLOW_DISCLOSURE
+        disclosure = _DISCLOSURE + " | 资金流信号: " + _FLOW_DISCLOSURE + " | 组合: " + _COMBO_DISCLOSURE
     if not rows:
         return {"stats": [], "disclosure": disclosure,
                 "note": "尚未计算(需 quantchive-collect --target fund-signal-stats / flow-signal-stats)"}

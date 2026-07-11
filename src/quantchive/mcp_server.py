@@ -261,6 +261,22 @@ def market_flow_signal_stats() -> dict:
             return _err(e)
 
 
+def market_combo_signal_stats() -> dict:
+    """信号组合(叠加)历史统计:基本面事件×近5交易日资金流确认,叠加有没有增益。
+
+    回答"净利转正再叠加吸筹确认,历史上是否比净利转正单独更好"。
+    kind 形如 'profit_turn_positive+accumulation';**baseline=该基本面信号单独的胜率**,
+    beats_baseline=true 表示叠加有统计显著增益。32组合多重检验:单个显著需谨慎,
+    多horizon同向更可信(disclosure已说明)。历史条件统计非预测。
+    """
+    from quantchive.service.market_signal_service import read_market_stats
+    with _readonly_conn() as conn:
+        try:
+            return read_market_stats(conn, family="combo")
+        except QueryError as e:
+            return _err(e)
+
+
 def flow_topology(trade_date: str | None = None, tier: str = "main",
                   top_sectors: int = 20) -> dict:
     """资金流向拓扑:大盘→行业(TopN)桑基。tier: main|super_large|large|medium|small。"""
@@ -325,6 +341,7 @@ _TOOLS = [
     get_tiers_series, flow_topology, sector_trends, get_series_range,
     get_series_batch, fund_nav, signal_backtest, describe_fundamentals,
     fundamental_signal_backtest, market_fundamental_signal_stats, market_flow_signal_stats,
+    market_combo_signal_stats,
 ]
 for _fn in _TOOLS:
     mcp.tool()(_fn)

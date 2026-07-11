@@ -15,6 +15,7 @@ from quantchive.models.enums import (
     AssetClass, Caliber, RunType, SubjectKind, SubjectLevel, ValueType,
 )
 from quantchive.service.market_signal_service import (
+    compute_market_combo_stats,
     compute_market_flow_stats,
     compute_market_fundamental_stats,
     read_market_stats,
@@ -160,3 +161,54 @@ def test_family_filter(conn) -> None:
     assert all(s["signal_kind"].startswith(("profit", "revenue", "roe")) for s in fund["stats"])
     assert flow["stats"] == [] and "去重" in flow["disclosure"]
     assert "重述" in fund["disclosure"]
+
+
+# ---------- 组合条件统计(阶段E-E1) ----------
+
+def _setup_declining_stock(conn, sym, name, yoy_series, price_days=120):
+    """价一路下跌+主力净流入(吸筹信号持续闪) → 组合确认方。"""
+    sid, _ = SubjectDao(conn).upsert(
+        asset_class=AssetClass.A_SHARE, level=SubjectLevel.INSTRUMENT,
+        subject_kind=SubjectKind.STOCK, source_code="sina_flow",
+        source_symbol=sym, display_name=name, exchange="SZSE")
+    rid = RunDao(conn).start(source_code="sina_flow", run_type=RunType.EOD_BACKFILL,
+                             caliber=Caliber.EASTMONEY, trade_date="2025-01-01",
+                             minute_slot="EOD", adapter_version="t", subject_scope="x",
+                             asset_class_code="a_share")
+    now = datetime.now(timezone.utc).isoformat()
+    for period, yoy in yoy_series:
+        conn.execute(
+            """INSERT INTO fundamental_item(subject_id,report_period,announce_date,statement,
+               item,value_int,unit,source_code,ingestion_run_id,created_at)
+               VALUES(?,?,?,?,?,?,?,?,?,?)""",
+            (sid, period, None, "performance", "net_profit_yoy", yoy, "bp",
+             "eastmoney_fin", rid, now))
+    obs = ObservationDao(conn)
+    base = _date(2025, 3, 3)
+    for i in range(price_days):
+        d = (base + timedelta(days=i)).isoformat()
+        obs.upsert(subject_id=sid, source_code="sina_flow", trade_date=d, minute_slot="EOD",
+                   value_type=ValueType.DAILY_FINAL, granularity="daily", observed_at=now,
+                   five_tier={"main_net_cents": 10_00, "super_large_net_cents": 100,
+                              "large_net_cents": 0, "medium_net_cents": 0, "small_net_cents": 0},
+                   price_micro=(200 - i) * 1_000_000, change_pct_bp=-50, source_unit="yuan",
+                   ingestion_run_id=rid, created_at=now)
+    return sid
+
+
+def test_combo_confirmation_gating(conn) -> None:
+    """有资金流确认的基本面事件进组合;无确认的不进;baseline=基本面单独胜率。"""
+    yoy = [("2024Q4", -1000), ("2025Q1", 5000)]     # 净利转正,可见2025-04-30
+    _setup_stock(conn, "600001", "无确认股", yoy)    # 价升(无吸筹) → 不进组合
+    _setup_declining_stock(conn, "600002", "有确认股", yoy)  # 价跌+主力流入(吸筹) → 进组合
+    res = compute_market_combo_stats(conn, horizons=(20,))
+    assert res["events"].get("profit_turn_positive+accumulation@20") == 1   # 只有确认股
+    out = read_market_stats(conn, family="combo")
+    row = next(s for s in out["stats"]
+               if s["signal_kind"] == "profit_turn_positive+accumulation" and s["horizon"] == 20)
+    assert row["trigger_count"] == 1
+    # 基本面单独:2事件(升股赢/跌股输)→ 单独胜率50% = 组合的对照
+    assert row["baseline_win_rate"] == "50.0"
+    # 组合(只含跌股)胜率0 → 未跑赢单独
+    assert row["win_rate"] == "0.0" and not row["beats_baseline"]
+    assert "多horizon同向" in out["disclosure"] or "单独" in out["disclosure"]

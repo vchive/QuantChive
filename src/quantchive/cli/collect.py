@@ -42,7 +42,8 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="quantchive-collect")
     parser.add_argument("--target", default="sector",
                         choices=["sector", "stock", "etf", "members", "backfill", "derive-sectors",
-                                 "scan-signals", "fundamentals", "fund-signal-stats", "flow-signal-stats"])
+                                 "scan-signals", "fundamentals", "fund-signal-stats",
+                                 "flow-signal-stats", "combo-signal-stats"])
     parser.add_argument("--sector-type", default="industry,concept")
     parser.add_argument("--scope", default="stock", choices=["stock"],
                         help="backfill: 回填个股历史")
@@ -118,6 +119,18 @@ def main(argv: list[str] | None = None) -> None:
         _log.info("全市场资金流信号统计完成", extra={"context": summary})
         print(f"flow-signal-stats: as_of {summary.get('as_of')} · {summary.get('stocks')}股 "
               f"· {summary.get('stats_written')}条统计 · 事件 {summary.get('events')}")
+        sys.exit(0)
+
+    # combo-signal-stats：组合条件统计(基本面事件×资金流确认,阶段E-E1)
+    if args.target == "combo-signal-stats":
+        from quantchive.service.market_signal_service import compute_market_combo_stats
+
+        def _cprog(done, total, name):
+            print(f"  聚合 {done}股…", flush=True)
+        summary = compute_market_combo_stats(conn, progress=_cprog)
+        _log.info("组合信号统计完成", extra={"context": summary})
+        print(f"combo-signal-stats: as_of {summary.get('as_of')} · {summary.get('stocks')}股 "
+              f"· {summary.get('stats_written')}条组合统计")
         sys.exit(0)
 
     # fundamentals：基本面回填（业绩+三大报表,东财 akshare,announce_date PIT）
