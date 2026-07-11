@@ -15,9 +15,11 @@ from quantchive.models.enums import (
     AssetClass, Caliber, RunType, SubjectKind, SubjectLevel, ValueType,
 )
 from quantchive.service.market_signal_service import (
+    compute_market_flow_stats,
     compute_market_fundamental_stats,
     read_market_stats,
 )
+from quantchive.service.signal_lib import SignalHit, dedupe_hits_non_overlapping
 
 
 @pytest.fixture
@@ -96,3 +98,65 @@ def test_recompute_overwrites(conn) -> None:
 def test_read_empty(conn) -> None:
     out = read_market_stats(conn)
     assert out["stats"] == [] and "尚未计算" in out["note"]
+
+
+# ---------- 资金流全市场聚合(H) ----------
+
+def test_dedupe_non_overlapping() -> None:
+    """同股连日触发 → horizon 内只留第1个;间隔>horizon 都留。"""
+    dates = [f"d{i:02d}" for i in range(20)]
+    hits = [SignalHit("d01", "accumulation"), SignalHit("d02", "accumulation"),
+            SignalHit("d03", "accumulation"), SignalHit("d10", "accumulation")]
+    out = dedupe_hits_non_overlapping(hits, dates, horizon=5)
+    assert [h.trade_date for h in out] == ["d01", "d10"]   # d02/d03 在 d01+5 内被去重
+
+
+def test_dedupe_keeps_sparse() -> None:
+    dates = [f"d{i:02d}" for i in range(20)]
+    hits = [SignalHit("d01", "x"), SignalHit("d08", "x"), SignalHit("d15", "x")]
+    out = dedupe_hits_non_overlapping(hits, dates, horizon=5)
+    assert len(out) == 3                                    # 间隔>horizon 全保留
+
+
+def test_flow_stats_aggregate(conn) -> None:
+    """造一只价跌+主力净流入的股 → 吸筹事件聚合进 market_signal_stat。"""
+    sid, _ = SubjectDao(conn).upsert(
+        asset_class=AssetClass.A_SHARE, level=SubjectLevel.INSTRUMENT,
+        subject_kind=SubjectKind.STOCK, source_code="sina_flow",
+        source_symbol="600009", display_name="流股", exchange="SSE")
+    rid = RunDao(conn).start(source_code="sina_flow", run_type=RunType.EOD_BACKFILL,
+                             caliber=Caliber.EASTMONEY, trade_date="2025-01-01",
+                             minute_slot="EOD", adapter_version="t", subject_scope="x",
+                             asset_class_code="a_share")
+    now = datetime.now(timezone.utc).isoformat()
+    obs = ObservationDao(conn)
+    base = _date(2025, 3, 3)
+    # 60日:前30日价跌(吸筹窗)后30日横盘,主力全程净流入
+    for i in range(60):
+        d = (base + timedelta(days=i)).isoformat()
+        price = (100 - i) if i < 30 else 70
+        chg = -100 if 0 < i < 30 else 0
+        obs.upsert(subject_id=sid, source_code="sina_flow", trade_date=d, minute_slot="EOD",
+                   value_type=ValueType.DAILY_FINAL, granularity="daily", observed_at=now,
+                   five_tier={"main_net_cents": 10_00, "super_large_net_cents": 100,
+                              "large_net_cents": 0, "medium_net_cents": 0, "small_net_cents": 0},
+                   price_micro=price * 1_000_000, change_pct_bp=chg, source_unit="yuan",
+                   ingestion_run_id=rid, created_at=now)
+    res = compute_market_flow_stats(conn, horizons=(5,))
+    assert res["events"]["accumulation@5"] >= 1
+    # 去重生效:连日吸筹触发但非重叠 → 事件数远小于触发日数(30日跌段最多6个非重叠)
+    assert res["events"]["accumulation@5"] <= 6
+    out = read_market_stats(conn, family="flow")
+    assert any(s["signal_kind"] == "accumulation" for s in out["stats"])
+    assert "去重" in out["disclosure"]
+
+
+def test_family_filter(conn) -> None:
+    """family 过滤:基本面/资金流各自只出自家 kind + 对应披露。"""
+    _setup_stock(conn, "600001", "甲", [("2024Q4", -1000), ("2025Q1", 5000)])
+    compute_market_fundamental_stats(conn, horizons=(20,))
+    fund = read_market_stats(conn, family="fundamental")
+    flow = read_market_stats(conn, family="flow")
+    assert all(s["signal_kind"].startswith(("profit", "revenue", "roe")) for s in fund["stats"])
+    assert flow["stats"] == [] and "去重" in flow["disclosure"]
+    assert "重述" in fund["disclosure"]

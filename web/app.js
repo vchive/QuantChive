@@ -689,6 +689,18 @@ async function renderSignalScan(kind = "accumulation", tradeDate = "") {
   v.appendChild(sigToggle);
   v.appendChild(el("div", "hint", desc + " —— 历史统计口径,点个股看该信号历史胜率,非预测。"));
 
+  // 全市场历史统计行(该信号普遍有没有用——预计算秒读,加载失败静默跳过)
+  const statLine = el("div", "hint");
+  v.appendChild(statLine);
+  api(`/api/signals/market_stats?family=flow`).then((ms) => {
+    const rows = (ms.stats || []).filter((s) => s.signal_kind === kind);
+    if (!rows.length) { statLine.remove(); return; }
+    statLine.innerHTML = "📊 全市场历史(去重样本): " + rows.map((s) => {
+      const edge = s.beats_baseline ? "✓显著" : "≈基准";
+      return `T+${s.horizon} 胜率<b>${s.win_rate}%</b>(CI ${s.wilson_low}~${s.wilson_high}, n=${s.trigger_count}) vs基准${s.baseline_win_rate}% ${edge}`;
+    }).join(" · ") + " —— 历史统计非预测";
+  }).catch(() => statLine.remove());
+
   const skel = el("div", "skeleton"); skel.style.height = "400px"; skel.style.margin = "12px 0";
   v.appendChild(skel);
   try {

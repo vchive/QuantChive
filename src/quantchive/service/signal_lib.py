@@ -116,3 +116,29 @@ def _super_large_spike(
             out.append(SignalHit(rows[i].trade_date, SUPER_LARGE_SPIKE,
                                  strength=int(z * 100)))
     return out
+
+
+def dedupe_hits_non_overlapping(
+    hits: list[SignalHit], ordered_dates: list[str], horizon: int,
+) -> list[SignalHit]:
+    """同股同信号事件去重:取一个触发后,跳过其后 horizon 个交易日内的后续触发。
+
+    统计诚实(全市场聚合):滑窗信号常连日触发,相邻触发的前向收益高度重叠相关,
+    直接计数会让 Wilson CI 假性收窄。non-overlapping entries 是事件研究标准做法。
+    hits 单股单信号;ordered_dates 该股交易日轴升序。
+    """
+    if not hits:
+        return []
+    idx = {d: i for i, d in enumerate(ordered_dates)}
+    out: list[SignalHit] = []
+    blocked_until = -1
+    for h in sorted(hits, key=lambda x: x.trade_date):
+        i = idx.get(h.trade_date)
+        if i is None:
+            continue
+        if i <= blocked_until:
+            continue
+        out.append(h)
+        blocked_until = i + horizon
+    return out
+

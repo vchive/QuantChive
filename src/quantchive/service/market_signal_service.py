@@ -17,11 +17,20 @@ from itertools import groupby
 
 from quantchive.dao.run_dao import RunDao
 from quantchive.models.enums import Caliber, RunStatus, RunType
-from quantchive.service.backtest_core import forward_return_from_visible, wilson_interval
+from quantchive.service.backtest_core import (
+    forward_return_bp,
+    forward_return_from_visible,
+    wilson_interval,
+)
 from quantchive.service.fundamental_signal import (
     FUND_SIGNAL_KINDS,
     detect_fundamental_signals,
     ytd_to_single_quarter,
+)
+from quantchive.service.signal_lib import (
+    SIGNAL_KINDS as FLOW_SIGNAL_KINDS,
+    dedupe_hits_non_overlapping,
+    detect_signals,
 )
 
 _KIND_ITEM = {
@@ -122,6 +131,15 @@ def compute_market_fundamental_stats(
             progress(stocks_done, 0, "")
 
     # 统计 → upsert
+    written = _upsert_stats(conn, returns, base_wins, base_tot, as_of, now_iso)
+
+    RunDao(conn).finish(run_id, status=RunStatus.SUCCESS, subjects_ok=written, subjects_failed=0)
+    return {"as_of": as_of, "stocks": stocks_done, "stats_written": written,
+            "events": {f"{k}@{h}": len(v) for (k, h), v in returns.items()}}
+
+
+def _upsert_stats(conn, returns, base_wins, base_tot, as_of, now_iso) -> int:
+    """(kind,horizon)→returns 累积 → Wilson/中位/基准 → upsert market_signal_stat。"""
     written = 0
     for (kind, h), rs in returns.items():
         n = len(rs)
@@ -145,21 +163,119 @@ def compute_market_fundamental_stats(
              round((wins / n) * 10000) if n else 0, round(low * 10000), round(high * 10000),
              round(baseline * 10000), now_iso))
         written += 1
+    return written
 
+
+class _FlowRow:
+    """轻量行(喂 detect_signals,避免构造 33 字段 ObservationRow ×590万)。"""
+
+    __slots__ = ("trade_date", "price_micro", "main_net_cents", "super_large_net_cents")
+
+    def __init__(self, trade_date, price_micro, main_net, super_large_net):
+        self.trade_date = trade_date
+        self.price_micro = price_micro
+        self.main_net_cents = main_net
+        self.super_large_net_cents = super_large_net
+
+
+def compute_market_flow_stats(
+    conn: sqlite3.Connection, *, horizons: tuple[int, ...] = (1, 5, 20),
+    kinds: tuple[str, ...] | None = None, progress: "object | None" = None,
+) -> dict:
+    """全市场资金流信号聚合(吸筹/派发/连续净流入/超大单异动)。
+
+    统计诚实:同股同信号 non-overlapping 去重(按最大 horizon,防滑窗连日触发假性收窄CI);
+    同日横截面聚簇在 disclosure 明示。信号检测复用审计过的 detect_signals(trailing窗防前视);
+    标签价=sina change_pct 链式(复权无关)。horizons 短(1/5/20):资金流是快信号。
+    """
+    kinds = kinds or FLOW_SIGNAL_KINDS
+    now_iso = _dt.now(_tz.utc).isoformat()
+    max_h = max(horizons)
+
+    as_of_row = conn.execute(
+        "SELECT MAX(trade_date) FROM observation WHERE source_code='sina_flow' "
+        "AND value_type='daily_final'").fetchone()
+    as_of = as_of_row[0] if as_of_row else None
+    if not as_of:
+        return {"stats_written": 0, "reason": "无行情"}
+
+    run_id = RunDao(conn).start(
+        source_code="sina_flow", run_type=RunType.MARKET_AGGREGATE, caliber=Caliber.EASTMONEY,
+        trade_date=as_of, minute_slot="STATS", adapter_version="flow-signal-stats-v1",
+        subject_scope="market_flow_signals", asset_class_code="a_share")
+
+    returns: dict[tuple[str, int], list[int]] = {(k, h): [] for k in kinds for h in horizons}
+    base_wins: dict[int, int] = {h: 0 for h in horizons}
+    base_tot: dict[int, int] = {h: 0 for h in horizons}
+
+    cur = conn.execute(
+        "SELECT subject_id, trade_date, main_net_cents, super_large_net_cents, "
+        "price_micro, change_pct_bp FROM observation "
+        "WHERE source_code='sina_flow' AND value_type='daily_final' "
+        "AND main_net_cents IS NOT NULL AND change_pct_bp IS NOT NULL "
+        "ORDER BY subject_id, trade_date")
+    stocks_done = 0
+    for _sid, grp in groupby(cur, key=lambda r: r[0]):
+        rows: list[_FlowRow] = []
+        price_by_date: dict[str, int] = {}
+        acc = Decimal(1_000_000)
+        for _, d, main, slarge, px, chg in grp:
+            rows.append(_FlowRow(d, px, main, slarge))
+            acc = acc * (Decimal(10000 + chg) / Decimal(10000))
+            price_by_date[d] = int(acc)     # 标签用链式价指数(复权无关);信号价用原 price_micro
+        ordered = sorted(price_by_date)
+        if len(ordered) < max_h + 1:
+            continue
+
+        for h in horizons:
+            for i in range(0, len(ordered) - h, _BASELINE_STRIDE):
+                p0, p1 = price_by_date[ordered[i]], price_by_date[ordered[i + h]]
+                base_tot[h] += 1
+                if round((p1 / p0 - 1) * 10000) > 0:
+                    base_wins[h] += 1
+
+        for kind in kinds:
+            hits = detect_signals(rows, kind=kind)
+            hits = dedupe_hits_non_overlapping(hits, ordered, max_h)   # 统计诚实:非重叠
+            for hit in hits:
+                for h in horizons:
+                    r = forward_return_bp(price_by_date, hit.trade_date, ordered, h)
+                    if r is not None:
+                        returns[(kind, h)].append(r)
+        stocks_done += 1
+        if progress and stocks_done % 1000 == 0:
+            progress(stocks_done, 0, "")
+
+    written = _upsert_stats(conn, returns, base_wins, base_tot, as_of, now_iso)
     RunDao(conn).finish(run_id, status=RunStatus.SUCCESS, subjects_ok=written, subjects_failed=0)
     return {"as_of": as_of, "stocks": stocks_done, "stats_written": written,
             "events": {f"{k}@{h}": len(v) for (k, h), v in returns.items()}}
 
 
-def read_market_stats(conn: sqlite3.Connection) -> dict:
-    """读全市场基本面信号统计(agent/端点秒读)。含重述披露。"""
+_FLOW_DISCLOSURE = ("历史条件统计,非预测。同股同信号已做非重叠去重(触发后horizon内不重复计);"
+                    "但同日多股触发受共同市场因素影响,有效独立样本低于名义n;不构成投资建议")
+
+
+def read_market_stats(conn: sqlite3.Connection, *, family: str | None = None) -> dict:
+    """读全市场信号统计(agent/端点秒读)。family: 'flow'|'fundamental'|None(全部)。
+
+    披露按信号族:基本面带重述口径披露;资金流带去重+同日聚簇披露。
+    """
     rows = conn.execute(
         "SELECT signal_kind, horizon, as_of, trigger_count, win_count, avg_return_bp, "
         "median_return_bp, win_rate_bp, wilson_low_bp, wilson_high_bp, baseline_bp, computed_at "
         "FROM market_signal_stat ORDER BY signal_kind, horizon").fetchall()
+    if family == "flow":
+        rows = [r for r in rows if r[0] in FLOW_SIGNAL_KINDS]
+        disclosure = _FLOW_DISCLOSURE
+    elif family == "fundamental":
+        rows = [r for r in rows if r[0] in FUND_SIGNAL_KINDS]
+        disclosure = _DISCLOSURE
+    else:
+        disclosure = _DISCLOSURE + " | 资金流信号: " + _FLOW_DISCLOSURE
     if not rows:
-        return {"stats": [], "disclosure": _DISCLOSURE,
-                "note": "尚未计算(需 quantchive-collect --target fund-signal-stats)"}
+        return {"stats": [], "disclosure": disclosure,
+                "note": "尚未计算(需 quantchive-collect --target fund-signal-stats / flow-signal-stats)"}
 
     def pct(bp: int) -> str:
         return str((Decimal(bp) / 100).quantize(Decimal("0.1")))
@@ -174,4 +290,4 @@ def read_market_stats(conn: sqlite3.Connection) -> dict:
         "beats_baseline": r[8] > r[10],   # CI下界 > 基准 → 统计显著优于
     } for r in rows]
     return {"as_of": rows[0][2], "computed_at": rows[0][11],
-            "stats": stats, "disclosure": _DISCLOSURE}
+            "stats": stats, "disclosure": disclosure}

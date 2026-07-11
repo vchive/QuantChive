@@ -240,7 +240,23 @@ def market_fundamental_signal_stats() -> dict:
     from quantchive.service.market_signal_service import read_market_stats
     with _readonly_conn() as conn:
         try:
-            return read_market_stats(conn)
+            return read_market_stats(conn, family="fundamental")
+        except QueryError as e:
+            return _err(e)
+
+
+def market_flow_signal_stats() -> dict:
+    """全市场资金流信号历史统计(吸筹/派发背离、连续净流入、超大单异动 × 前向1/5/20日)。
+
+    回答"某资金流信号普遍有没有用":全市场5年事件聚合(同股非重叠去重),CI收窄可信。
+    beats_baseline=true 表示 CI 下界高于基准(统计显著)。预计算秒读。
+    注意:同日多股触发受共同市场因素影响,有效独立样本低于名义n(已在disclosure说明)。
+    历史条件统计非预测。
+    """
+    from quantchive.service.market_signal_service import read_market_stats
+    with _readonly_conn() as conn:
+        try:
+            return read_market_stats(conn, family="flow")
         except QueryError as e:
             return _err(e)
 
@@ -308,7 +324,7 @@ _TOOLS = [
     rank_stocks_in_sector, scan_market_stocks, rank_etf, get_series,
     get_tiers_series, flow_topology, sector_trends, get_series_range,
     get_series_batch, fund_nav, signal_backtest, describe_fundamentals,
-    fundamental_signal_backtest, market_fundamental_signal_stats,
+    fundamental_signal_backtest, market_fundamental_signal_stats, market_flow_signal_stats,
 ]
 for _fn in _TOOLS:
     mcp.tool()(_fn)

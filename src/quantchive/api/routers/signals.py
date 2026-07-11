@@ -54,3 +54,14 @@ def signal_scan(
     from quantchive.service.scan_service import list_hits
     k = kind if kind in SIGNAL_KINDS else "accumulation"
     return list_hits(conn, kind=k, trade_date=trade_date, top_n=top_n)
+
+
+@scan_router.get("/market_stats")
+def market_stats(
+    family: str | None = Query(None, description="flow|fundamental|缺省全部"),
+    conn=Depends(get_conn),
+) -> dict:
+    """全市场信号历史统计(预计算秒读)。历史条件统计非预测,披露按信号族。"""
+    from quantchive.service.market_signal_service import read_market_stats
+    f = family if family in ("flow", "fundamental") else None
+    return read_market_stats(conn, family=f)
