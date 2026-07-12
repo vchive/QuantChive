@@ -48,7 +48,7 @@ uv run quantchive-mcp        # stdio,等 JSON-RPC 输入
 }
 ```
 
-## 工具清单(16)
+## 工具清单(21)
 
 | 工具 | 用途 | 面向 |
 |---|---|---|
@@ -68,6 +68,11 @@ uv run quantchive-mcp        # stdio,等 JSON-RPC 输入
 | `get_series_batch` | 多主体区间批量取数 | 策略 |
 | `fund_nav` | 开放式基金净值 | 问答 |
 | `signal_backtest` | 某股资金流信号历史胜率+置信区间(历史统计,非预测) | 前瞻/分析 |
+| `describe_fundamentals` | 某股基本面(业绩+三大报表,PIT按公告日) | 问答/分析 |
+| `fundamental_signal_backtest` | 某股基本面信号历史回测(净利转正/加速等,可见日=法定披露截止日) | 前瞻/分析 |
+| `market_fundamental_signal_stats` | 全市场基本面信号历史统计(数千事件聚合,CI收窄) | 前瞻 |
+| `market_flow_signal_stats` | 全市场资金流信号历史统计(去重聚合) | 前瞻 |
+| `market_combo_signal_stats` | 信号叠加历史统计(基本面×资金流确认,对照=基本面单独) | 前瞻 |
 
 ## 数据语义(工具返回)
 
@@ -95,7 +100,7 @@ mcp_servers:
     cwd: /Users/liminghan01/Documents/quant/QuantChive
 ```
 
-Hermes 启动后自动发现 QuantChive 的 16 个工具。用同一问题(如"今天全市场主力净流入前5")
+Hermes 启动后自动发现 QuantChive 的 21 个工具。用同一问题(如"今天全市场主力净流入前5")
 分别问 Hermes 与 QuantChive 自带的「智能助手」面板,横向对比推理质量/工具调用/答案准确度。
 
 ## 两种 agent 的定位

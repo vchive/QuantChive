@@ -5,9 +5,9 @@
 - **主体分层下钻**：大盘 → 板块（行业/概念）→ 个体（个股/ETF）。
 - **能力自描述**：不同主体/品种支持的指标不同，平台诚实按能力暴露（不支持时明确告知，绝不伪造）。
 - **本期真实数据**：A股（大盘资金流求和 + 行业/概念板块五档 + 个股价量五档 + 板块内下钻）、基金/ETF（价/量/规模 proxy + 开放式基金按需净值）。债券/期货/商品/外汇架构预留。
-- **五大前端视图**：大盘/个股**资金档位博弈**(四档流入流出+背离) · **资金流向拓扑**(大盘→行业→个股,桑基/旭日/树图) · **信号扫描**(全市场今日闪信号+个股历史胜率回测) · **智能助手**(ReAct agent,provider无关) · 基金ETF。
-- **前瞻能力(诚实)**：资金流信号回测给「历史条件胜率+Wilson置信区间+样本数+基准对照」，**不编次日概率**(次日方向天花板51-55%,守住不前视/不编数据)。
-- **agent-ready**：查询能力沉淀在人与 agent 共用的只读 Service 层；MCP server 暴露 16 工具(含 signal_backtest)；前端自建 ReAct agent + 支持 Hermes 接入对比。
+- **五大前端视图**：**资金档位博弈**(四档流入流出+背离) · **资金流向拓扑**(大盘→行业→个股,桑基/旭日/树图) · **信号扫描**(全市场今日闪信号+全市场历史胜率) · **策略发现**(基本面/资金流/组合三张 edge 图谱一屏看全) · **智能助手**(ReAct agent,provider无关)。
+- **前瞻能力(诚实)**：信号回测给「历史条件胜率+Wilson置信区间+样本数+基准对照」，**不编次日概率**(守住不前视/不编数据)。全市场5年聚合实测：基本面信号强(净利转正T+60胜率55.8% vs基准48.4%,+7.4pp)、资金流信号弱且快衰减(≤+1.8pp)、**组合"业绩改善+吸筹确认"最强(T+60 60.9%)**;ML判决不做(线性叠加已达天花板)。
+- **agent-ready**：查询能力沉淀在人与 agent 共用的只读 Service 层；MCP server 暴露 **21 工具**(含信号/基本面回测、全市场/组合统计)；前端自建 ReAct agent + 支持 Hermes 接入对比。
 
 ## 技术栈
 
@@ -37,11 +37,17 @@ uv run quantchive-collect --target backfill --source sina --days 1825
 # 板块四档派生 + 信号扫描预计算（盘后,供板块博弈图/信号扫描tab）
 uv run quantchive-collect --target derive-sectors
 uv run quantchive-collect --target scan-signals
+# 基本面回填 + 信号 edge 全市场聚合（供策略发现tab/agent前瞻）
+uv run quantchive-collect --target fundamentals --years 3
+uv run quantchive-collect --target fund-signal-stats
+uv run quantchive-collect --target flow-signal-stats
+uv run quantchive-collect --target combo-signal-stats
 
 # 起 Web（下钻可视化 + 只读 API）
 uv run uvicorn quantchive.app:app --reload
-# 打开 http://127.0.0.1:8000 —— 品种Tab(A股/基金ETF/资金流向/信号扫描/智能助手)
-#   A股: 大盘卡片 → 板块双榜 → 板块内个股 → 个股资金档位博弈(可展开信号历史回测)
+# 打开 http://127.0.0.1:8000 —— 品种Tab(A股/基金ETF/资金流向/信号扫描/策略发现/智能助手)
+#   A股: 大盘卡片 → 板块双榜 → 板块内个股 → 个股资金档位博弈(可展开信号回测+基本面面板)
+#   策略发现: 基本面/资金流/组合三张 edge 图谱,"✓显著"=统计上真有 edge
 #   信号扫描: 选信号 → 全市场今日命中股 → 点股看博弈图+历史胜率
 
 # 全量测试
