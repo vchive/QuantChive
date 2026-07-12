@@ -747,6 +747,89 @@ async function renderSignalScan(kind = "accumulation", tradeDate = "") {
   }
 }
 
+// ---- 策略发现:三张 edge 表(基本面/资金流/组合),整条前瞻路线的成果固化 ----
+const _FUND_NAMES = {
+  profit_turn_positive: "净利增速转正", profit_accelerate: "净利增速加速",
+  revenue_accelerate: "营收增速加速", roe_jump: "ROE跳升",
+};
+function edgeKindLabel(kind) {
+  if (kind.includes("+")) {
+    const [f, fl] = kind.split("+");
+    return (_FUND_NAMES[f] || f) + " + " + ((SIGNAL_META[fl] || [fl])[0]);
+  }
+  return _FUND_NAMES[kind] || (SIGNAL_META[kind] || [kind])[0];
+}
+
+function edgeTable(stats, opts) {
+  const t = el("table", "grid");
+  t.appendChild(el("thead", null,
+    `<tr><th>${opts.col}</th><th>前向</th><th>样本n</th><th>胜率</th>`
+    + `<th>95%置信区间</th><th>${opts.baseLabel}</th><th>判定</th></tr>`));
+  const tb = el("tbody");
+  stats.forEach((s) => {
+    const tr = el("tr");
+    tr.appendChild(el("td", "name", edgeKindLabel(s.signal_kind)));
+    tr.appendChild(el("td", "", "T+" + s.horizon));
+    tr.appendChild(el("td", "", String(s.trigger_count)));
+    tr.appendChild(el("td", "", s.win_rate + "%"));
+    tr.appendChild(el("td", "", s.wilson_low + "~" + s.wilson_high + "%"));
+    tr.appendChild(el("td", "", s.baseline_win_rate + "%"));
+    const beats = s.beats_baseline;
+    const verdict = el("td", beats ? "pos" : "", beats ? "✓ 显著" : "—");
+    tr.appendChild(verdict);
+    if (beats) tr.style.fontWeight = "600";
+    tb.appendChild(tr);
+  });
+  t.appendChild(tb);
+  return t;
+}
+
+async function renderEdgeBoard() {
+  const v = $("view"); v.innerHTML = "";
+  v.appendChild(el("h1", null, "策略发现 · 信号历史 edge 图谱"));
+  v.appendChild(el("div", "hint",
+    "全市场近5年聚合的信号历史胜率。判定「✓显著」= 95%置信区间下界高于基准(统计上真有 edge)。"
+    + " 全部为历史条件统计,非预测,不构成投资建议。"));
+  const skel = el("div", "skeleton"); skel.style.height = "300px"; skel.style.margin = "12px 0";
+  v.appendChild(skel);
+  try {
+    const [fund, flow, combo] = await Promise.all([
+      api("/api/signals/market_stats?family=fundamental"),
+      api("/api/signals/market_stats?family=flow"),
+      api("/api/signals/market_stats?family=combo"),
+    ]);
+    if (skel.parentNode) v.removeChild(skel);
+
+    const empty = !fund.stats.length && !flow.stats.length && !combo.stats.length;
+    if (empty) {
+      v.appendChild(el("div", "empty",
+        "暂无统计 —— 需运行 quantchive-collect --target fund-signal-stats / flow-signal-stats / combo-signal-stats。"));
+      return;
+    }
+
+    if (fund.stats.length) {
+      v.appendChild(el("h2", null, "① 基本面信号(对照:随机买入基准)"));
+      v.appendChild(edgeTable(fund.stats, { col: "信号", baseLabel: "基准" }));
+    }
+    if (flow.stats.length) {
+      v.appendChild(el("h2", null, "② 资金流信号(对照:随机买入基准)"));
+      v.appendChild(edgeTable(flow.stats, { col: "信号", baseLabel: "基准" }));
+      v.appendChild(el("div", "hint", flow.disclosure));
+    }
+    if (combo.stats.length) {
+      v.appendChild(el("h2", null, "③ 组合叠加(对照:基本面信号单独)"));
+      v.appendChild(el("div", "hint",
+        "「✓显著」= 叠加资金流确认后,胜率置信区间下界高于基本面信号单独 → 叠加真有增益。"));
+      v.appendChild(edgeTable(combo.stats, { col: "组合", baseLabel: "单独胜率" }));
+      v.appendChild(el("div", "hint", combo.disclosure));
+    }
+    setProvenance(null, `全市场信号统计 · as_of ${fund.as_of || flow.as_of || combo.as_of || "—"}`);
+  } catch (e) {
+    if (skel.parentNode) v.removeChild(skel);
+    v.appendChild(el("div", "hint", `${e.code || ""}: ${e.message || e}`));
+  }
+}
+
 // ---- 品种 Tab 切换：重置栈到根视图 ----
 function selectAsset(asset) {
   ASSET = asset;
@@ -757,6 +840,7 @@ function selectAsset(asset) {
   if (asset === "a_share") push("大盘", viewMarket);
   else if (asset === "topology") push("资金流向", () => viewTopology("main"));
   else if (asset === "signal_scan") push("信号扫描", () => renderSignalScan("accumulation"));
+  else if (asset === "edge") push("策略发现", renderEdgeBoard);
   else if (asset === "agent") push("智能助手", renderAgentPanel);
   else push("ETF", viewEtf);
 }

@@ -212,3 +212,19 @@ def test_combo_confirmation_gating(conn) -> None:
     # 组合(只含跌股)胜率0 → 未跑赢单独
     assert row["win_rate"] == "0.0" and not row["beats_baseline"]
     assert "多horizon同向" in out["disclosure"] or "单独" in out["disclosure"]
+
+
+def test_market_stats_endpoint_family_combo(conn) -> None:
+    """端点 family=combo 只返组合行(回归:曾漏 combo 白名单致全表泄漏)。"""
+    yoy = [("2024Q4", -1000), ("2025Q1", 5000)]
+    _setup_stock(conn, "600001", "甲", yoy)
+    _setup_declining_stock(conn, "600002", "乙", yoy)
+    compute_market_combo_stats(conn, horizons=(20,))
+    from fastapi.testclient import TestClient
+    from quantchive.app import create_app
+    from quantchive.api.deps import get_conn
+    app = create_app()
+    app.dependency_overrides[get_conn] = lambda: conn
+    c = TestClient(app)
+    j = c.get("/api/signals/market_stats?family=combo").json()
+    assert j["stats"] and all("+" in s["signal_kind"] for s in j["stats"])  # 全是组合

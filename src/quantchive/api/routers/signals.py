@@ -63,5 +63,5 @@ def market_stats(
 ) -> dict:
     """全市场信号历史统计(预计算秒读)。历史条件统计非预测,披露按信号族。"""
     from quantchive.service.market_signal_service import read_market_stats
-    f = family if family in ("flow", "fundamental") else None
+    f = family if family in ("flow", "fundamental", "combo") else None
     return read_market_stats(conn, family=f)
