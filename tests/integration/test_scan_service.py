@@ -123,3 +123,20 @@ def test_scan_endpoint(conn) -> None:
     assert r.status_code == 200
     j = r.json()
     assert j["kind"] == "accumulation" and len(j["rows"]) >= 1
+
+
+def test_scan_endpoint_empty_trade_date(conn) -> None:
+    """空 trade_date(前端"最新"传空串)→ 200 取最新日,不 422(回归)。"""
+    rid = _run(conn)
+    s1 = _stock(conn, "600001", "吸筹股")
+    _series(conn, s1, rid, [100, 99, 98, 97, 96, 95], [10_00] * 6)
+    last_day = (_date(2026, 6, 1) + timedelta(days=5)).isoformat()
+    scan_and_store(conn, trade_date=last_day)
+    from fastapi.testclient import TestClient
+    from quantchive.app import create_app
+    from quantchive.api.deps import get_conn
+    app = create_app()
+    app.dependency_overrides[get_conn] = lambda: conn
+    c = TestClient(app)
+    r = c.get("/api/signals/scan?kind=accumulation&trade_date=&top_n=100")
+    assert r.status_code == 200 and r.json()["trade_date"] == last_day

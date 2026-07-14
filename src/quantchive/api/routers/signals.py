@@ -42,18 +42,20 @@ scan_router = APIRouter(prefix="/api/signals", tags=["signals"])
 @scan_router.get("/scan")
 def signal_scan(
     kind: str = Query("accumulation", description="信号类型"),
-    trade_date: str | None = Query(None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
+    trade_date: str | None = Query(None, description="YYYY-MM-DD;空=最新"),
     top_n: int = Query(50, ge=1, le=200),
     conn=Depends(get_conn),
 ) -> dict:
     """某信号某日全市场命中股(盘后预计算,按强度降序)。历史统计,非预测。
 
     kind: accumulation|distribution|net_inflow_streak|super_large_spike。
-    返回命中股(名/价/涨跌/强度)+ available_dates(有扫描的日)。
+    trade_date 空/缺省=该信号最新扫描日。返回命中股+available_dates。
     """
+    import re
     from quantchive.service.scan_service import list_hits
     k = kind if kind in SIGNAL_KINDS else "accumulation"
-    return list_hits(conn, kind=k, trade_date=trade_date, top_n=top_n)
+    td = trade_date if (trade_date and re.match(r"^\d{4}-\d{2}-\d{2}$", trade_date)) else None
+    return list_hits(conn, kind=k, trade_date=td, top_n=top_n)
 
 
 @scan_router.get("/market_stats")
